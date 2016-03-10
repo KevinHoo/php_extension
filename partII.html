@@ -1,0 +1,2302 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<title>PHP扩展第二部分: 参数, 数组, ZVALs [Extension Writing Part II: Parameters, Arrays, and ZVALs]</title>
+	<style type="text/css">
+		.left {float: left; width: 48%; display: block;}
+		.left, .right {margin: 2px;}
+
+		div.left { display: block;}
+		.right { float: right; width: 48%}
+
+		section {clear: both; -ms-word-wrap: break-word; word-wrap: break-word; font-size: 14px; line-height:180%;}
+		pre {font-size: 12px; color: #999; line-height:120%;}
+		ul.toolbar {position: relative; height:20px; padding:0;}
+		ul.toolbar li {position:absolute; display: none;}
+		ul.toolbar li.active {display: block;}
+	</style>
+	<script type="text/javascript">
+
+	</script>
+</head>
+<body>
+<div class="wrapper">
+	<section>
+		<ul id="toolbar" class="toolbar">
+			<li class=""><a href="javascript:void(0)">隐藏英文</a></li>
+			<li class="active"><a href="javascript:void(0)">显示英文</a></li>
+		</ul>
+	</section>
+	<section>
+		<div class="left">
+			<h1>Extension Writing Part II: Parameters, Arrays, and ZVALs</h1>
+		</div>
+		<div class="right">
+			<h1>PHP 扩展编写 第二部分: 参数, 数组, ZVALs</h1>
+		</div>
+	</section>
+	<section>
+		<div class="left">
+			<ol>
+				<li><a href="#introduction">Introduction</a></li>
+				<li><a href="#accepting_values">Accepting Values</a></li>
+				<li><a href="#the_zval">The ZVAL</a></li>
+				<li><a href="#creating_zvals">Creating ZVALs</a></li>
+				<li><a href="#array">Arrays</a></li>
+				<li><a href="#symbol_tables_as_arrays">Symbol Tables as Arrays</a></li>
+				<li><a href="#reference_counting">Reference Counting</a></li>
+				<li><a href="#copies_versus_references">Copies versus References</a></li>
+				<li><a href="#sanity_check">Sanity Check</a></li>
+				<li><a href="#what_is_next">What’s Next?</a></li>
+			</ol>
+		</div>
+		<div class="right">
+			<ol>
+				<li><a href="#introduction">介绍</a></li>
+				<li><a href="#accepting_values">接收参数</a></li>
+				<li><a href="#the_zval">变量结构体: ZVAL</a></li>
+				<li><a href="#creating_zvals">创建变量: ZVALs</a></li>
+				<li><a href="#array">数组</a></li>
+				<li><a href="#symbol_tables_as_arrays">数组符号表</a></li>
+				<li><a href="#reference_counting">引用计数</a></li>
+				<li><a href="#copies_versus_references">拷贝与引用</a></li>
+				<li><a href="#sanity_check">完整检查</a></li>
+				<li><a href="#what_is_next">接下来干什么?</a></li>
+			</ol>
+		</div>
+	</section>
+	<section id="introduction">
+		<div class="left">
+			<h2>Introduction</h2>
+			<p> In Part One of this series you looked at the basic framework of a PHP extension. You declared simple functions that returned both static and dynamic values to the calling script, defined INI options, and declared internal values (globals). In this tutorial, you’ll learn how to accept values passed into your functions from a calling script and discover how PHP and the Zend Engine manage variables internally. </p>
+		</div>
+		<div class="right">
+			<h2>介绍</h2>
+			<p>在第一部分, 你了解了PHP扩展的整体框架, 包括声明简单的函数并返回动态或者静态值, 定义INI配置项, 声明全局变量. 在本章, 你讲学习如果接收从调用脚本传递进来的参数, 以及Zend 引擎如果管理内部变量.</p>
+		</div>
+	</section>
+	<section id="accepting_values">
+		<div class="left">
+			<h2>Accepting Values</h2>
+			<p>Unlike in userspace code, the parameters for an internal function aren’t actually declared in the function header. Instead, a reference to the parameter list is passed into every function – whether parameters were passed or not – and that function can then ask the Zend Engine to turn them into something usable.</p>
+			<p>Let’s take a look at this by defining a new function, hello_greetme(), which will accept one parameter and output it along with some greeting text. As before, we’ll be adding code in three places:</p>
+			<p>In php_hello.h, next to the other function prototypes:</p>
+			<pre>
+PHP_FUNCTION(hello_greetme);
+			</pre>
+			<p>In hello.c, at the end of the hello_functions structure:</p>
+			<pre>
+PHP_FE(hello_bool, NULL)
+    PHP_FE(hello_null, NULL)
+    PHP_FE(hello_greetme, NULL)
+    {NULL, NULL, NULL}
+};
+			</pre>
+			<p>And down near the end of hello.c after the other functions: </p>
+			<pre>
+PHP_FUNCTION(hello_greetme)
+{
+    char *name;
+    int name_len;
+    if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "s", &name, &name_len) == FAILURE) {
+        RETURN_NULL();
+    }
+
+    php_printf("Hello %s", name);
+
+    RETURN_TRUE;
+}
+			</pre>
+			<p>The bulk of the zend_parse_parameters() block will almost always look the same. ZEND_NUM_ARGS() provides a hint to the Zend Engine about the parameters which are to be retrieved, TSRMLS_CC is present to ensure thread safety, and the return value of the function is checked for SUCCESS or FAILURE. Under normal circumstances zend_parse_parameters() will return SUCCESS; however, if a calling script has attempted to pass too many or too few parameters, or if the parameters passed cannot be converted to the proper data type, Zend will automatically output an error message leaving your function to return control back to the calling script gracefully.</p>
+			<p>In this example you specified s to indicate that this function expects one and only one parameter to be passed, and that that parameter should be converted into a string data type and populated into the char* variable, which will be passed by reference (i.e. by name).</p>
+			<p>Note that an int variable was also passed into zend_parse_parameters() by reference. This allows the Zend Engine to provide the length of the string in bytes so that binary-safe functions don’t need to rely on strlen(name) to determine the string’s length. In fact, using strlen(name) may not even give the correct result, as name may contain one or more NULL characters prior to the end of the string.</p>
+			<p>Once your function has the name parameter firmly in hand, the next thing it does is output it as part of a formal greeting. Notice that php_printf() is used rather than the more familiar printf(). Using this function is important for several reasons. First, it allows the string being output to be processed through PHP’s output buffering mechanism, which may, in addition to actually buffering the data, perform additional processing such as gzip compression. Secondly, while stdout is a perfectly fine target for output when using CLI or CGI, most SAPIs expect output to come via a specific pipe or socket. Therefore, attempting to simply printf() to stdout could lead to data being lost, sent out of order, or corrupted, because it bypassed preprocessing.</p>
+			<p>Finally the function returns control to the calling program by simply returning TRUE. While you could allow control to reach the end of your function without explicitly returning a value (it will default to NULL), this is considered bad practice. A function that doesn’t have anything meaningful to report should typically return TRUE simply to say, “Everything’s cool, I did what you wanted”.</p>
+			<p>Because PHP strings may, in fact, contain NULLs, the way to output a binary-safe string, including NULLs and even characters following NULLs, would be to replace the php_printf() statement with the following block:</p>
+			<pre>
+php_printf("Hello ");
+PHPWRITE(name, name_len);
+php_printf("
+");
+			</pre>
+			<p>This block uses php_printf() to handle the strings which are known not to contain NULL characters, but uses another macro – PHPWRITE – to handle the user-provided string. This macro accepts the length (name_len) parameter provided by zend_parse_parameters() so that the entire contents of name can be printed out regardless of a stray NULL.</p>
+			<p>zend_parse_parameters() will also handle optional parameters. In the next example, you’ll create a function which expects a long (PHP’s integer data type), a double (float), and an optional Boolean value. A userspace declaration for this function might look something like:</p>
+			<pre>
+function hello_add($a, $b, $return_long = false) {
+    $sum = (int)$a + (float)$b;
+
+    if ($return_long) {
+        return intval($sum);
+    } else {
+        return floatval($sum);
+    }
+}
+			</pre>
+			<p> In C, this function will look like the following (don’t forget to add entries in php_hello.h and hello_functions[] to enable this when you add it to hello.c): </p>
+			<pre>
+PHP_FUNCTION(hello_add)
+{
+    long a;
+    double b;
+    zend_bool return_long = 0;
+    if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "ld|b", &a, &b, &return_long) == FAILURE) {
+        RETURN_NULL();
+    }
+
+    if (return_long) {
+        RETURN_LONG(a + b);
+    } else {
+        RETURN_DOUBLE(a + b);
+    }
+}
+			</pre>
+			<p>This time, your data type string reads as: “I want a (l)ong, then a (d)ouble”. The next character, a pipe, signifies that the rest of the parameter list is optional. If an optional parameter is not passed during the function call, then zend_parse_parameters() will not change the value passed into it. The final b is, of course, for Boolean. After the data type string, a, b, and return_long are passed through by reference so that zend_parse_parameters() can populate them with values.</p>
+			<p>Warning: while int and long are often used interchangeably on 32-bit platforms, using one in place of the other can be very dangerous when your code is recompiled on 64-bit hardware. So remember to use long for longs, and int for string lengths.</p>
+			<p>Table 1 shows the various types, and their corresponding letter codes and C types which can be used with zend_parse_parameters():</p>
+			<table>
+				<tr><th colspan="3">Table 1: Types and letter codes used in zend_parse_parameters()</th></tr>
+				<tr><th>Type</th><th>Code</th><th>Variable Type</th></tr>
+				<tr> <td>Boolean</td> <td>b</td> <td>zend_bool</td> </tr>
+				<tr> <td>Long</td> <td>l</td> <td>long</td> </tr>
+				<tr> <td>Double</td> <td>d</td> <td>double</td> </tr>
+				<tr> <td>String</td> <td>s</td> <td>char*, int</td> </tr>
+				<tr> <td>Resource</td> <td>r</td> <td>zval*</td> </tr>
+				<tr> <td>Array</td> <td>a</td> <td>zval*</td> </tr>
+				<tr> <td>Object</td> <td>o</td> <td>zval*</td> </tr>
+				<tr> <td>zval</td> <td>z</td> <td>zval*</td> </tr>
+			</table>
+			<p>You probably noticed right away that the last four types in Table 1 all return the same data type – a zval*. A zval, as you’ll soon learn, is the true data type which all userspace variables in PHP are stored as. The three “complex” data types, Resource, Array and Object, are type-checked by the Zend Engine when their data type codes are used with zend_parse_parameters(), but because they have no corresponding data type in C, no conversion is actually performed.</p>
+		</div>
+		<div class="right">
+			<h2>接收参数</h2>
+			<p>不像是用户代码, 内部函数的参数, 实际上不是定义在函数头部. 相反, 参数列表引用传递到每个函数, 不论是否传递了参数, 函数都会请求Zend 引擎来转换他们(转换为可用数据). </p>
+			<p>让我们一起看看下面定义的这个新函数, hello_greetme(), 它接收1一个参数, 并且返回这个参数以及一些问候语. 像之前一样, 我们将在这3个地方新增代码: </p>
+			<p>首先是 php_hello.h, 紧接着函数原型的后面, 追加:</p>
+			<pre>
+PHP_FUNCTION(hello_greetme);
+			</pre>
+			<p>其次是 hello.c, 在 hello_functions 结构体的最后面, 追加: PHP_FE(hello_greetme, NULL)</p>
+			<pre>
+PHP_FE(hello_bool, NULL)
+PHP_FE(hello_null, NULL)
+PHP_FE(hello_greetme, NULL)
+{NULL, NULL, NULL}
+			</pre>
+			<p>并且在 hello.c 文件的底部其他函数之后追加: </p>
+			<pre>
+PHP_FUNCTION(hello_greetme)
+{
+    char *name;
+    int name_len;
+    if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "s", &name, &name_len) == FAILURE) {
+        RETURN_NULL();
+    }
+
+    php_printf("Hello %s", name);
+
+    RETURN_TRUE;
+}
+			</pre>
+			<p> zend_parse_parameters() 函数块, 大部分看起来是一样的. ZEND_NUM_ARGS() 函数提供给Zend 引擎一个关于接收到参数的提示, TSRMLS_CC 表示确认线程安全, 并且返回被检查过是SUCCESS 或者 FAILURE的函数值. 在正常情况下, zend_parse_parameters() 将返回SUCCESS; 当然了, 如果调用脚本尝试多传或者少传阐述, 或者类型传递错误, Zend 会自动输出一个错误信息, 并让你的程序顺利返回到调用脚本. </p>
+			<p>在这个示例中, 你指定了一个"s"来表明这个函数期待有且仅有一个参数可以传递, 而且参数应该被转换为字符串类型, 并填充到变量char* (以引用方式传递). </p>
+			<p>注意, int 变量也是通过引用传递到 zend_parse_parameters(). 这允许Zend 引擎提供字符串的字节长度, 以便二进制安全的函数不需要依赖strlen(name)来获取字符串的长度. 事实上,  如果name包含一个或多个NULL字符在字符串结束之前, 使用 strlen(name) 或许无法给出正确的长度. </p>
+			 <p>一旦你已经确定函数的参数名, 下一步就是, 返回格式化的问候语句. 主要, 扩展开发中 php_printf() 函数要比 printf()函数更常用. 为什么要使用Pphp_printf()? 第一, 它允许字符串可以使用PHP输出缓存机制, 除了实际缓存数据例外, 会做额外的一些处理, 比如压缩. 第二, 如果标准输出是一个比较完美的目标(当使用CLI 或 CGI时), 大多的SAPIs 期望输出是通过指定的pipe(管道) 或者 socket. 所以, 尝试使用简单的printf() 写到标准输入中, 可以数据丢失, 顺序错乱, 损坏, 就因为它绕过了预处理. </p>
+			<p>最后, 函数返回TRUE给调用程序. 如果你在函数结尾没有显示返回值(默认返回NULL), 这个是很糟糕的实践. 就算是一个没有任何意义的函数, 也需要返回一个TRUE, "一切事情都很酷, 我做了你想要的事情". </p>
+			<p>因为PHP 字符串可以包含NULL, 一个输出二进制安全字符串的方式, 包含NULLs, 甚至字符接着NULLs. 使用下面的的代码块替换 php_printf()行: </p>
+			<pre>
+php_printf("Hello ");
+PHPWRITE(name, name_len);
+php_printf("
+");
+			</pre>
+			<p>php_printf() 函数中字符串并没有NULL 字符, 但是使用了宏 PHPWRITE 来应用用户提供字符串. 这个宏接收zend_parse_parameters() 提供的长度参数: (name_len), 所以可以输出包括NULL在内的所有字符串. </p>
+			<p>zend_parse_parameters() 可以处理可选参数. 在下面的例子中, 你将创建一个函数, 期望接收一个long参数, double(float)参数, 可选的boolean参数.  PHP中用户函数定义如下: </p>
+			<pre>
+function hello_add($a, $b, $return_long = false) {
+    $sum = (int)$a + (float)$b;
+
+    if ($return_long) {
+        return intval($sum);
+    } else {
+        return floatval($sum);
+    }
+}
+			</pre>
+			<p>在C 源码中, 函数应该像下面这样(不要忘了在头文件中添加PHP_FUNCTION(hello_greetme); 以及在c源码文件hello_functions[] 追加 PHP_FE(hello_greetme, NULL). 每新增一个函数都要在这两个地方声明和增加一下): </p>
+			<pre>
+PHP_FUNCTION(hello_add)
+{
+    long a;
+    double b;
+    zend_bool return_long = 0;
+    if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "ld|b", &a, &b, &return_long) == FAILURE) {
+        RETURN_NULL();
+    }
+
+    if (return_long) {
+        RETURN_LONG(a + b);
+    } else {
+        RETURN_DOUBLE(a + b);
+    }
+}
+			</pre>
+			<p>这次, 你的数据类型"ld|b" 表示"我需要一个(l)ong, 然后是(d)ouble". 下一个字符, 管道符, 表示剩下的参数是可选的. 在函数调用过程中, 如果一个可选的参数没有传递值, 那么zend_parse_parameters() 不会改变传递进来的值. 最后一个b 当然就是Boolean. 在数据类型串的后面, a, b, 以及return_long 通过引用传递, 所以 zend_parse_parameters() 可以使用值来填充他们. </p>
+			<p>警告: int 和 long在32位平台上可以互换使用, 但是在64位平台上互换使用是非常危险的. 所以, 请记住, 使用long 表示长整型, int 用于表示字符串长度. </p>
+			<p>表1 zend_parse_parameters()允许使用的各种变量类型, 以及对应的字符码, C语言的类型: </p>
+			<table>
+				<tr><th colspan="3">表1: 用于zend_parse_parameters()的类型和字符码</th></tr>
+				<tr><th>类型</th><th>Code</th><th>C变量类型</th></tr>
+				<tr> <td>Boolean</td> <td>b</td> <td>zend_bool</td> </tr>
+				<tr> <td>Long</td> <td>l</td> <td>long</td> </tr>
+				<tr> <td>Double</td> <td>d</td> <td>double</td> </tr>
+				<tr> <td>String</td> <td>s</td> <td>char*, int</td> </tr>
+				<tr> <td>Resource</td> <td>r</td> <td>zval*</td> </tr>
+				<tr> <td>Array</td> <td>a</td> <td>zval*</td> </tr>
+				<tr> <td>Object</td> <td>o</td> <td>zval*</td> </tr>
+				<tr> <td>zval</td> <td>z</td> <td>zval*</td> </tr>
+			</table>
+			<p>你也许会发现, 最后四个数据类型对应的C语言变量类型是一样的: zval*. zval, 就像你接下来要看到的那样, 是一个真正的数据类型, 在PHP中所有用户定义变量都存储这里. 三个复杂点儿的数据类型, 资源, 数组和对象, 当数据类型的代码在 zend_parse_parameters()中用到的时候会做类型检查, 但是因为, 在C语言他们没有相应的数据类型, 实际上没有执行任何转换. </p>
+		</div>
+	</section>
+	<section id="the_zval">
+		<div class="left">
+			<h2>The ZVAL</h2>
+			<p>The zval, and PHP userspace variables in general, will easily be the most difficult concepts you’ll need to wrap your head around. They will also be the most vital. To begin with, let’s look at the structure of a zval: </p>
+			<pre>
+struct {
+    union {
+        long lval;
+        double dval;
+        struct {
+            char *val;
+            int len;
+        } str;
+        HashTable *ht;
+        zend_object_value obj;
+    } value;
+    zend_uint refcount;
+    zend_uchar type;
+    zend_uchar is_ref;
+} zval;
+			</pre>
+			<p>As you can see, every zval has three basic elements in common: type, is_ref, and refcount. is_ref and refcount will be covered later on in this tutorial; for now let’s focus on type.</p>
+			<p>By now you should already be familiar with PHP’s eight data types. They’re the seven listed in Table 1, plus NULL, which despite (or perhaps because of) the fact that it literally is nothing, is a type unto its own. Given a particular zval, the type can be examined using one of three convenience macros: Z_TYPE(zval), Z_TYPE_P(zval*), or Z_TYPE_PP(zval**). The only functional difference between these three is the level of indirection expected in the variable passed into it. The convention of using _P and _PP is repeated in other macros, such as the *VAL macros you’re about to look at.</p>
+			<p>The value of type determines which portion of the zval‘s value union will be set. The following piece of code demonstrates a scaled down version of var_dump(): </p>
+			<pre>
+PHP_FUNCTION(hello_dump)
+{
+    zval *uservar;
+    if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "z", uservar) == FAILURE) {
+        RETURN_NULL();
+    }
+
+    switch (Z_TYPE_P(uservar)) {
+        case IS_NULL:
+            php_printf("NULL
+");
+            break;
+        case IS_BOOL:
+            php_printf("Boolean: %s
+", Z_LVAL_P(uservar) ? "TRUE" : "FALSE");
+            break;
+        case IS_LONG:
+            php_printf("Long: %ld
+", Z_LVAL_P(uservar));
+            break;
+        case IS_DOUBLE:
+            php_printf("Double: %f
+", Z_DVAL_P(uservar));
+            break;
+        case IS_STRING:
+            php_printf("String: ");
+            PHPWRITE(Z_STRVAL_P(uservar), Z_STRLEN_P(uservar));
+            php_printf("
+");
+            break;
+        case IS_RESOURCE:
+            php_printf("Resource
+");
+            break;
+        case IS_ARRAY:
+            php_printf("Array
+");
+            break;
+        case IS_OBJECT:
+            php_printf("Object
+");
+            break;
+        default:
+            php_printf("Unknown
+");
+    }
+
+    RETURN_TRUE;
+}
+			</pre>
+			<p>As you can see, the Boolean data type shares the same internal element as the long data type. Just as with RETURN_BOOL(), which you used in Part One of this series, FALSE is represented by 0, while TRUE is represented by 1.
+
+				When you use zend_parse_parameters() to request a specific data type, such as string, the Zend Engine checks the type of the incoming variable. If it matches, Zend simply passes through the corresponding parts of the zval to the right data types. If it’s of a different type, Zend converts it as is appropriate and/or possible, using its usual type-juggling rules.
+
+				Modify the hello_greetme() function you implemented earlier by separating it out into smaller pieces:</p>
+			<pre>
+
+PHP_FUNCTION(hello_greetme)
+{
+    zval *zname;
+    if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "z", &zname) == FAILURE) {
+        RETURN_NULL();
+    }
+
+    convert_to_string(zname);
+
+    php_printf("Hello ");
+    PHPWRITE(Z_STRVAL_P(zname), Z_STRLEN_P(zname));
+    php_printf("
+");
+
+    RETURN_TRUE;
+}
+			</pre>
+			<p>This time, zend_parse_parameters() was told to simply retrieve a PHP variable (zval) regardless of type, then the function explicitly cast the variable as a string (similar to $zname = (string)$zname; ), then php_printf() was called using the STRing VALue of the zname structure. As you’ve probably guessed, other convert_to_*() functions exist for bool, long, and double. </p>
+		</div>
+		<div class="right">
+			<h2>PHP变量容器: ZVAL</h2>
+			<p>一般情况下, 变量容器zval 和 PHP 用户变量, 很容易成为你脑子最难理解的概念. 他们还是至关重要的概念. 现在开始, 我们看一下zval的结构: </p>
+			<pre>
+struct {
+    union {
+        long lval;
+        double dval;
+        struct {
+            char *val;
+            int len;
+        } str;
+        HashTable *ht;
+        zend_object_value obj;
+    } value;
+    zend_uint refcount;
+    zend_uchar type;
+    zend_uchar is_ref;
+} zval;
+			</pre>
+			<p>就像你看到的这样, 每个zval 拥有三个基本的元素: type, is_ref, refcount. is_ref and refcount 在教程后面会说明; 我们现在着重看一下 type. </p>
+			<p>现在你应该已经非常熟悉PHP 的8种数据类型了(Boolean,Long,Double,String, Resource, Array, Object, NULL). 在表格1 中列出了7个, 外加一个NULL类型(尽管它实际上什么都不是), 它只是他自己的数据类型. 给出一个特定类型 zval, 这个类型可以使用三个宏来检查: Z_TYPE(zval), Z_TYPE_P(zval*), Z_TYPE_PP(zval**). 这三个宏的功能区别是在参数传递过来间接级别(其实看三个参数就明白了, zval变量, zval* 指针变量, zval** 指针变量的指针变量). 使用_P 和 _PP 来区别参数传递间接级别的约定, 在其他的宏中也一样, 比如 *VAL 宏也使用同样的约定. </p>
+			<p>类型的值决定了那个zval 的值共同体会被设置. 下面的代码片段演示了缩小版的var_dump()函数: </p>
+			<pre>
+PHP_FUNCTION(hello_dump)
+{
+    zval *uservar;
+    if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "z", uservar) == FAILURE) {
+        RETURN_NULL();
+    }
+
+    switch (Z_TYPE_P(uservar)) {
+        case IS_NULL:
+            php_printf("NULL
+");
+            break;
+        case IS_BOOL:
+            php_printf("Boolean: %s
+", Z_LVAL_P(uservar) ? "TRUE" : "FALSE");
+            break;
+        case IS_LONG:
+            php_printf("Long: %ld
+", Z_LVAL_P(uservar));
+            break;
+        case IS_DOUBLE:
+            php_printf("Double: %f
+", Z_DVAL_P(uservar));
+            break;
+        case IS_STRING:
+            php_printf("String: ");
+            PHPWRITE(Z_STRVAL_P(uservar), Z_STRLEN_P(uservar));
+            php_printf("
+");
+            break;
+        case IS_RESOURCE:
+            php_printf("Resource
+");
+            break;
+        case IS_ARRAY:
+            php_printf("Array
+");
+            break;
+        case IS_OBJECT:
+            php_printf("Object
+");
+            break;
+        default:
+            php_printf("Unknown
+");
+    }
+
+    RETURN_TRUE;
+}
+			</pre>
+			<p>如你所见, Boolean 数据类型和long类型的数据共享相同的内部元素. 就像 RETURN_BOOL(), 教程第一章节用到的, FALSE 由0 表示, TRUE 由 1来表示. </p>
+			<p>当你使用zend_parse_parameters() 请求一个具体的数据类型, 比如string, Zend 引擎检查传入变量的类型. 如果类型匹配, Zend 通过zval 相应的部分传递进来, 并转换为正确的数据类型. 如果类型不匹配, Zend 会转换为可能的数据类型, 使用常见的类型兼容规则. </p>
+			<p>修改你之前实现的函数 hello_greetme(), 分离成如下的较小代码块: </p>
+
+			<pre>
+PHP_FUNCTION(hello_greetme)
+{
+    zval *zname;
+    if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "z", &zname) == FAILURE) {
+        RETURN_NULL();
+    }
+
+    convert_to_string(zname);
+
+    php_printf("Hello ");
+    PHPWRITE(Z_STRVAL_P(zname), Z_STRLEN_P(zname));
+    php_printf("
+");
+
+    RETURN_TRUE;
+}
+			</pre>
+			<p>这次, zend_parse_parameters() 被告诉要简单检索一个PHP变量zval 而不管其类型如何, 然后函数显式强制转换为一个string (就类似: $zname=(string)$zname;), 最后呢, php_printf() 被调用, 使用zname 结构的STRing VALue. 你可能猜测, 其他convert_to_*()函数, 如bool, long, double 同样存在. </p>
+		</div>
+	</section>
+	<section id="creating_zvals">
+		<div class="left">
+			<h2>Creating ZVALs</h2>
+			<p>So far, the zvals you’ve worked with have been allocated by the Zend Engine and will be freed the same way. Sometimes, however, it’s necessary to create your own zval. Consider the following block of code:</p>
+			<pre>
+{
+    zval *temp;
+    ALLOC_INIT_ZVAL(temp);
+
+    Z_TYPE_P(temp) = IS_LONG;
+    Z_LVAL_P(temp) = 1234;
+
+    zval_ptr_dtor(&temp);
+}
+			</pre>
+			<p>ALLOC_INIT_ZVAL(), as its name implies, allocates memory for a zval* and initializes it as a new variable. Once that’s done, the Z_*_P() macros can be used to set the type and value of this variable. zval_ptr_dtor() handles the dirty work of cleaning up the memory allocated for the variable.</p>
+			<p> The two Z_*_P() calls could have actually been reduced to a single statement: </p>
+			<pre>
+ZVAL_LONG(temp, 1234);
+			</pre>
+			<p>Similar macros exist for the other types, and follow the same syntax as the RETURN_*() macros you saw in Part One of thise series. In fact the RETURN_*() macros are just thin wrappers for RETVAL_*() and, by extension, ZVAL_*(). The following five versions are all identical:</p>
+			<pre>
+RETURN_LONG(42);
+RETVAL_LONG(42);
+return;
+
+ZVAL_LONG(return_value, 42);
+return;
+
+Z_TYPE_P(return_value) = IS_LONG;
+Z_LVAL_P(return_value) = 42;
+return;
+
+return_value->type = IS_LONG;
+return_value->value.lval = 42;
+return;
+			</pre>
+			<p>If you’re sharp, you’re thinking about the impact of how these macros are defined on the way they’re used in functions like hello_long(). “Where does return_value come from and why isn’t it being allocated with ALLOC_INIT_ZVAL()?”, you might be wondering.</p>
+			<p>While it may be hidden from you in your day-to-day extension writing, return_value is actually a function parameter defined in the prototype of every PHP_FUNCTION() definition. The Zend Engine allocates memory for it and initializes it as NULL so that even if your function doesn’t explicitly set it, a value will still be available to the calling program. When your internal function finishes executing, it passes that value to the calling program, or frees it if the calling program is written to ignore it. </p>
+		</div>
+		<div class="right">
+			<h2>创建 ZVALs</h2>
+			<p>到目前为止, zvals, 是由Zend 引擎来分配并以同样方式释放. 有时, 不管怎样, 需要创建自己的zval. 考虑到下面的代码块: </p>
+			<pre>
+{
+    zval *temp;
+    ALLOC_INIT_ZVAL(temp);
+
+    Z_TYPE_P(temp) = IS_LONG;
+    Z_LVAL_P(temp) = 1234;
+
+    zval_ptr_dtor(&temp);
+}
+			</pre>
+			<p>ALLOC_INIT_ZVAL(), 就像他的名字暗含着, 为zval* 分配内存, 并作为新变量初始化. 一旦完成, Z_*_P() 宏可以用来设置变量的类型和值. zval_ptr_dtor() 处理内存清理的工作. </p>
+			<p>这两个Z_*_P()宏的调用, 实际上可以缩减合并为一个表达式:  </p>
+			<pre>
+ZVAL_LONG(temp, 1234);
+			</pre>
+			<p>类似的其他数据类型的宏也存在, 就像第一章中熟悉的RETURN_*()宏一样. 实际上, RETURN_*() 宏只是RETVAL_*()的简单包装, 引申开来, ZVAL_*()也是如此. 下面5个版本完全相同: </p>
+			<pre>
+RETURN_LONG(42);
+RETVAL_LONG(42);
+return;
+
+ZVAL_LONG(return_value, 42);
+return;
+
+Z_TYPE_P(return_value) = IS_LONG;
+Z_LVAL_P(return_value) = 42;
+return;
+
+return_value->type = IS_LONG;
+return_value->value.lval = 42;
+return;
+			</pre>
+			<p>如果你足够锐利, 你正在考虑这些宏不同的定义方式, 对他们被使用到函数(如 hello_long())中有什么影响. "return_value 从哪里来, 而且为什么他不是被ALLOC_INIT_ZVAL()分配?", 你也许正在这么想. </p>
+			<p>他也许会隐藏在你不停的扩展开发过程中, return_val 实际上是个函数参数, 在每个PHP_FUNCTION() 原型中定义. Zend 引擎为它分配内存, 初始化为NULL, 所以尽管你的函数没有显示设置它, 对于调用成来讲仍然有一个可用的值. 当你的内部函数执行结束, 它会传递那个值给调用程序, 或者释放它(如果调用程序忽略返回值). </p>
+		</div>
+	</section>
+	<section id="array">
+		<div class="left">
+			<h2>Arrays</h2>
+			<p> Since you’ve used PHP in the past, you’ve already recognized an array as a variable whose purpose is to carry around other variables. The way this is represented internally is through a structure known as a HashTable. When creating arrays to be returned to PHP, the simplest approach involves using one of the functions listed in Table 2. </p>
+			<table>
+				<tr><th colspan="3">Table 2: zval array creation functions</th> </tr>
+				<tr><th>PHP Syntax</th> <th>C Syntax (arr is a zval*)</th> <th>Meaning</th> </tr>
+				<tr> <td> $arr = array(); </td> <td> array_init(arr); </td> <td> Initialize a new array </td> </tr>
+				<tr> <td>$arr[] = NULL; </td> <td> add_next_index_null(arr); </td> <td rowspan="6">Add a value of a given type to a numerically indexed array</td> </tr>
+				<tr> <td>$arr[] = 42;</td> <td>add_next_index_long(arr, 42);</td>  </tr>
+				<tr> <td>$arr[] = true; </td> <td>add_next_index_bool(arr, 1);</td>  </tr>
+				<tr> <td>$arr[] = 3.14;</td> <td>add_next_index_double(arr, 3.14);</td>  </tr>
+				<tr> <td>$arr[] = 'foo';</td> <td>add_next_index_string(arr, "foo", 1);</td>  </tr>
+				<tr> <td>$arr[] = $myvar;</td> <td>add_next_index_zval(arr, myvar);</td>  </tr>
+				<tr> <td>$arr[0] = NULL;</td> <td>add_index_null(arr, 0);</td> <td rowspan="6">Add a value of a given type to a specific index in an array</td> </tr>
+				<tr> <td>$arr[1] = 42;</td> <td>add_index_long(arr, 1, 42);</td>  </tr>
+				<tr> <td>$arr[2] = true;</td> <td>add_index_bool(arr, 2, 1);</td>  </tr>
+				<tr> <td>$arr[3] = 3.14;</td> <td>add_index_double(arr, 3, 3.14);</td>  </tr>
+				<tr> <td>$arr[4] = 'foo';</td> <td>add_index_string(arr, 4, "foo", 1);</td>  </tr>
+				<tr> <td>$arr[5] = $myvar;</td> <td>add_index_zval(arr, 5, myvar);</td>  </tr>
+				<tr> <td>$arr['abc'] = NULL;</td> <td>add_assoc_null(arr, "abc");</td> <td rowspan="6">Add a value of a given type to an associatively indexed array</td> </tr>
+				<tr> <td>$arr['def'] = 711;</td> <td>add_assoc_long(arr, "def", 711);</td>  </tr>
+				<tr> <td>$arr['ghi'] = true;</td> <td>add_assoc_bool(arr, "ghi", 1);</td>  </tr>
+				<tr> <td>$arr['jkl'] = 1.44;</td> <td>add_assoc_double(arr, "jkl", 1.44);</td>  </tr>
+				<tr> <td>$arr['mno'] = 'baz';</td> <td>add_assoc_string(arr, "mno", "baz", 1);</td>  </tr>
+				<tr> <td>$arr['pqr'] = $myvar;</td> <td>add_assoc_zval(arr, "pqr", myvar);</td>  </tr>
+			</table>
+			<p>As with the RETURN_STRING() macro, the add_*_string() functions take a 1 or a 0 in the final parameter to indicate whether the string contents should be copied. They also have a kissing cousin in the form of an add_*_stringl() variant for each. The l indicates that the length of the string will be explicitly provided (rather than having the Zend Engine determine this with a call to strval(), which is binary-unsafe).</p>
+			<p>Using this binary-safe form is as simple as specifying the length just before the duplication parameter, like so:</p>
+			<pre>
+add_assoc_stringl(arr, "someStringVar", "baz", 3, 1);
+			</pre>
+			<p>Using the add_assoc_*() functions, all array keys are assumed to contain no NULLs – the add_assoc_*() functions themselves are not binary-safe with respect to keys. Using keys with NULLs in them is discouraged (as it is already a technique used with protected and private object properties), but if doing so is necessary, you’ll learn how you can do it soon enough, when we get into the zend_hash_*() functions later.</p>
+			<p>To put what you’ve just learned into practice, create the following function to return an array of values to the calling program. Be sure to add entries to php_hello.h and hello_functions[] so as to properly declare this function.</p>
+			<pre>
+PHP_FUNCTION(hello_array)
+{
+    char *mystr;
+    zval *mysubarray;
+    array_init(return_value);
+
+    add_index_long(return_value, 42, 123);
+
+    add_next_index_string(return_value, "I should now be found at index 43", 1);
+
+    add_next_index_stringl(return_value, "I'm at 44!", 10, 1);
+
+    mystr = estrdup("Forty Five");
+    add_next_index_string(return_value, mystr, 0);
+
+    add_assoc_double(return_value, "pi", 3.1415926535);
+
+    ALLOC_INIT_ZVAL(mysubarray);
+    array_init(mysubarray);
+    add_next_index_string(mysubarray, "hello", 1);
+    add_assoc_zval(return_value, "subarray", mysubarray);
+}
+			</pre>
+			<p>
+				Building this extension and issuing var_dump(hello_array()); gives:
+			</p>
+			<pre>
+array(6) {
+  [42]=&gt;
+  int(123)
+  [43]=&gt;
+  string(33) "I should now be found at index 43"
+  [44]=&gt;
+  string(10) "I'm at 44!"
+  [45]=&gt;
+  string(10) "Forty Five"
+  ["pi"]=&gt;
+  float(3.1415926535)
+  ["subarray"]=&gt;
+  array(1) {
+    [0]=&gt;
+    string(5) "hello"
+  }
+}
+			</pre>
+			<p>Reading values back out of arrays means extracting them as zval**s directly from a HashTable using the zend_hash family of functions from the ZENDAPI. Let’s start with a simple function which accepts one array as a parameter:</p>
+			<pre>
+function hello_array_strings($arr) {
+    if (!is_array($arr)) return NULL;
+
+    printf("The array passed contains %d elements
+", count($arr));
+
+    foreach($arr as $data) {
+        if (is_string($data)) echo "$data
+";
+    }
+}
+			</pre>
+			<p>Or, in C:</p>
+			<pre>
+PHP_FUNCTION(hello_array_strings)
+{
+    zval *arr, **data;
+    HashTable *arr_hash;
+    HashPosition pointer;
+    int array_count;
+    if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "a", &arr) == FAILURE) {
+        RETURN_NULL();
+    }
+
+    arr_hash = Z_ARRVAL_P(arr);
+    array_count = zend_hash_num_elements(arr_hash);
+
+    php_printf("The array passed contains %d elements
+", array_count);
+
+    for(zend_hash_internal_pointer_reset_ex(arr_hash, &pointer); zend_hash_get_current_data_ex(arr_hash, (void**) &data, &pointer) == SUCCESS; zend_hash_move_forward_ex(arr_hash, &pointer)) {
+
+        if (Z_TYPE_PP(data) == IS_STRING) {
+            PHPWRITE(Z_STRVAL_PP(data), Z_STRLEN_PP(data));
+            php_printf("
+");
+        }
+    }
+    RETURN_TRUE;
+}
+			</pre>
+			<p>In this function only those array elements which are of type string are output, in order to keep the function brief. You may be wondering why we didn’t just use convert_to_string() as we did in the hello_greetme() function earlier. Let’s give that a shot; replace the for loop above with the following:</p>
+			<pre>
+
+    for(zend_hash_internal_pointer_reset_ex(arr_hash, &pointer); zend_hash_get_current_data_ex(arr_hash, (void**) &data, &pointer) == SUCCESS; zend_hash_move_forward_ex(arr_hash, &pointer)) {
+        convert_to_string_ex(data);
+        PHPWRITE(Z_STRVAL_PP(data), Z_STRLEN_PP(data));
+        php_printf("
+");
+    }
+			</pre>
+			<p>Now compile your extension again and run the following userspace code through it:</p>
+			<pre>
+&lt;?php
+$a = array('foo',123);
+var_dump($a);
+hello_array_strings($a);
+var_dump($a);
+?&gt;
+			</pre>
+			<p>Notice that the original array was changed! Remember, the convert_to_*() functions have the same effect as calling set_type(). Since you’re working with the same array that was passed in, changing its type here will change the original variable. In order to avoid this, you need to first make a copy of the zval. To do this, change that for loop again to the following:</p>
+			<pre>
+    for(zend_hash_internal_pointer_reset_ex(arr_hash, &pointer); zend_hash_get_current_data_ex(arr_hash, (void**) &data, &pointer) == SUCCESS; zend_hash_move_forward_ex(arr_hash, &pointer)) {
+        zval temp;
+
+        temp = **data;
+        zval_copy_ctor(&temp);
+        convert_to_string(&temp);
+        PHPWRITE(Z_STRVAL(temp), Z_STRLEN(temp));
+        php_printf("
+");
+        zval_dtor(&temp);
+    }
+			</pre>
+			<p>The more obvious part of this version – temp = **data – just copies the data members of the original zval, but since a zval may contain additional resource allocations like char* strings, or HashTable* arrays, the dependent resources need to be duplicated with zval_copy_ctor(). From there it’s just an ordinary convert, print, and a final zval_dtor() to get rid of the resources used by the copy.</p>
+			<p>If you’re wondering why you didn’t do a zval_copy_ctor() when we first introduced convert_to_string(), it’s because the act of passing a variable into a function automatically performs a copy separating the zval from the original variable. This is only done on the base zval through, so any subordinate resources (such as array elements and object properties) still need to be separated before use.</p>
+			<p>Now that you’ve seen array values, let’s extend the exercise a bit by looking at the keys as well:</p>
+			<pre>
+for(zend_hash_internal_pointer_reset_ex(arr_hash, &pointer); zend_hash_get_current_data_ex(arr_hash, (void**) &data, &pointer) == SUCCESS; zend_hash_move_forward_ex(arr_hash, &pointer)) {
+    zval temp;
+    char *key;
+    int key_len;
+    long index;
+
+    if (zend_hash_get_current_key_ex(arr_hash, &key, &key_len, &index, 0, &pointer) == HASH_KEY_IS_STRING) {
+        PHPWRITE(key, key_len);
+    } else {
+        php_printf("%ld", index);
+    }
+
+    php_printf(" => ");
+
+    temp = **data;
+    zval_copy_ctor(&temp);
+    convert_to_string(&temp);
+    PHPWRITE(Z_STRVAL(temp), Z_STRLEN(temp));
+    php_printf("
+");
+    zval_dtor(&temp);
+}
+			</pre>
+			<p>Remember that arrays can have numeric indexes, associative string keys, or both. Calling zend_hash_get_current_key_ex() makes it possible to fetch either type from the current position in the array, and determine its type based on the return values, which may be any of HASH_KEY_IS_STRING, HASH_KEY_IS_LONG, or HASH_KEY_NON_EXISTANT. Since zend_hash_get_current_data_ex() was able to return a zval**, you can safely assume that HASH_KEY_NON_EXISTANT will not be returned, so only the IS_STRING and IS_LONG possibilities need to be checked.</p>
+			<p>There’s another way to iterate through a HashTable. The Zend Engine exposes three very similar functions to accommodate this task: zend_hash_apply(), zend_hash_apply_with_argument(), and zend_hash_apply_with_arguments(). The first form just loops through a HashTable, the second form allows a single argument to be passed through as a void*, while the third form allows an unlimited number of arguments via a vararg list. hello_array_walk() shows each of these in action:</p>
+			<pre>
+static int php_hello_array_walk(zval **element TSRMLS_DC)
+{
+    zval temp;
+    temp = **element;
+    zval_copy_ctor(&temp);
+    convert_to_string(&temp);
+    PHPWRITE(Z_STRVAL(temp), Z_STRLEN(temp));
+    php_printf("
+");
+    zval_dtor(&temp);
+
+    return ZEND_HASH_APPLY_KEEP;
+}
+
+static int php_hello_array_walk_arg(zval **element, char *greeting TSRMLS_DC)
+{
+    php_printf("%s", greeting);
+    php_hello_array_walk(element TSRMLS_CC);
+
+    return ZEND_HASH_APPLY_KEEP;
+}
+
+static int php_hello_array_walk_args(zval **element, int num_args, var_list args, zend_hash_key *hash_key)
+{
+    char *prefix = va_arg(args, char*);
+    char *suffix = va_arg(args, char*);
+    TSRMLS_FETCH();
+
+    php_printf("%s", prefix);
+    php_hello_array_walk(element TSRMLS_CC);
+    php_printf("%s
+", suffix);
+
+    return ZEND_HASH_APPLY_KEEP;
+}
+
+PHP_FUNCTION(hello_array_walk)
+{
+    zval *zarray;
+    int print_newline = 1;
+
+    if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "a", &zarray) == FAILURE) {
+        RETURN_NULL();
+    }
+
+    zend_hash_apply(Z_ARRVAL_P(zarray), (apply_func_t)php_hello_array_walk TSRMLS_CC);
+    zend_hash_apply_with_argument(Z_ARRVAL_P(zarray), (apply_func_arg_t)php_hello_array_walk_arg, "Hello " TSRMLS_CC);
+    zend_hash_apply_with_arguments(Z_ARRVAL_P(zarray), (apply_func_args_t)php_hello_array_walk_args, 2, "Hello ", "Welcome to my extension!");
+
+    RETURN_TRUE;
+}
+			</pre>
+			<p>By now you should be familiar enough with the usage of the functions involved that most of the above code will be obvious. The array passed to hello_array_walk() is looped through three times, once with no arguments, once with a single argument, and a third time with two arguments. In this design, the walk_arg() and walk_args() functions actually rely on the no-argument walk() function to do the job of converting and printing the zval, since the job is common across all three.</p>
+			<p>In this block of code, as in most places where you’ll use zend_hash_apply(), the apply() functions return ZEND_HASH_APPLY_KEEP. This tells the zend_hash_apply() function to leave the element in the HashTable and continue on with the next one. Other values which can be returned here are: ZEND_HASH_APPLY_REMOVE, which does just what it says – removes the current element and continues applying at the next – and ZEND_HASH_APPLY_STOP, which will halt the array walk at the current element and exit the zend_hash_apply() function completely. </p>
+			<p>The less familiar component in all this is probably TSRMLS_FETCH(). As you may recall from Part One, the TSRMLS_* macros are part of the Thread Safe Resource Management layer, and are necessary to keep one thread from trampling on another. Because the multi-argument version of zend_hash_apply() uses a vararg list, the tsrm_ls marker doesn’t wind up getting passed into the walk() function. In order to recover it for use when we call back into php_hello_array_walk(), your function calls TSRMLS_FETCH() which performs a lookup to find the correct thread in the resource pool. (Note: This method is substantially slower than passing the argument directly, so use it only when unavoidable.)</p>
+			<p>Iterating through an array using this foreach-style approach is a common task, but often you’ll be looking for a specific value in an array by index number or by associative key. This next function will return a value from an array passed in the first parameter based on the offset or key specified in the second parameter.</p>
+			<pre>
+PHP_FUNCTION(hello_array_value)
+{
+    zval *zarray, *zoffset, **zvalue;
+    long index = 0;
+    char *key = NULL;
+    int key_len = 0;
+    if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "az", &zarray, &zoffset) == FAILURE) {
+        RETURN_NULL();
+    }
+
+    switch (Z_TYPE_P(zoffset)) {
+        case IS_NULL:
+            index = 0;
+            break;
+        case IS_DOUBLE:
+           index = (long)Z_DVAL_P(zoffset);
+            break;
+        case IS_BOOL:
+        case IS_LONG:
+        case IS_RESOURCE:
+            index = Z_LVAL_P(zoffset);
+            break;
+        case IS_STRING:
+            key = Z_STRVAL_P(zoffset);
+            key_len = Z_STRLEN_P(zoffset);
+            break;
+        case IS_ARRAY:
+            key = "Array";
+            key_len = sizeof("Array") - 1;
+            break;
+        case IS_OBJECT:
+            key = "Object";
+            key_len = sizeof("Object") - 1;
+            break;
+        default:
+            key = "Unknown";
+            key_len = sizeof("Unknown") - 1;
+    }
+
+    if (key && zend_hash_find(Z_ARRVAL_P(zarray), key, key_len + 1, (void**)&zvalue) == FAILURE) {
+        RETURN_NULL();
+    } else if (!key && zend_hash_index_find(Z_ARRVAL_P(zarray), index, (void**)&zvalue) == FAILURE) {
+        RETURN_NULL();
+    }
+
+    *return_value = **zvalue;
+    zval_copy_ctor(return_value);
+}
+			</pre>
+			<p>This function starts off with a switch block that treats type conversion in much the same way as the Zend Engine would. NULL is treated as 0, Booleans are treated as their corresponding 0 or 1 values, doubles are cast to longs (and truncated in the process) and resources are cast to their numerical value. The treatment of resource types is a hangover from PHP 3, when resources really were just numbers used in a lookup and not a unique type unto themselves.</p>
+			<p>Arrays and objects are simply treated as a string literal of “Array” or “Object”, since no honest attempt at conversion would actually make sense. The final default condition is put in as an ultra-careful catchall just in case this extension gets compiled against a future version of PHP, which may have additional data types.</p>
+			<p>Since key is only set to non-NULL if the function is looking for an associative key, it can use that value to decide whether it should use an associative or index based lookup. If the chosen lookup fails, it’s because the key doesn’t exist, and the function therefore returns NULL to indicate failure. Otherwise that zval is copied into return_value.</p>
+		</div>
+		<div class="right">
+			<h2>数组</h2>
+			<p>从你开始使用PHP, 你已经意识到一个数组用来组合(is to carry around)其他变量. 它内部实现的结构是HashTable. 当创建数组并返回给PHP, 最简单的方法是使用表2中列出的函数: </p>
+			<table>
+				<tr><th colspan="3">表2: zval 数组创建函数</th> </tr>
+				<tr><th>PHP 语法</th> <th>C 语法(arr is a zval*)</th> <th>意义</th> </tr>
+				<tr> <td> $arr = array(); </td> <td> array_init(arr); </td> <td> 初始化一个新数组</td> </tr>
+				<tr> <td>$arr[] = NULL; </td> <td> add_next_index_null(arr); </td> <td rowspan="6">添加一个给定类型的值到数字索引数组</td> </tr>
+				<tr> <td>$arr[] = 42;</td> <td>add_next_index_long(arr, 42);</td>  </tr>
+				<tr> <td>$arr[] = true; </td> <td>add_next_index_bool(arr, 1);</td>  </tr>
+				<tr> <td>$arr[] = 3.14;</td> <td>add_next_index_double(arr, 3.14);</td>  </tr>
+				<tr> <td>$arr[] = 'foo';</td> <td>add_next_index_string(arr, "foo", 1);</td>  </tr>
+				<tr> <td>$arr[] = $myvar;</td> <td>add_next_index_zval(arr, myvar);</td>  </tr>
+				<tr> <td>$arr[0] = NULL;</td> <td>add_index_null(arr, 0);</td> <td rowspan="6">添加一个给定类型的值到指定索引的数组中</td> </tr>
+				<tr> <td>$arr[1] = 42;</td> <td>add_index_long(arr, 1, 42);</td>  </tr>
+				<tr> <td>$arr[2] = true;</td> <td>add_index_bool(arr, 2, 1);</td>  </tr>
+				<tr> <td>$arr[3] = 3.14;</td> <td>add_index_double(arr, 3, 3.14);</td>  </tr>
+				<tr> <td>$arr[4] = 'foo';</td> <td>add_index_string(arr, 4, "foo", 1);</td>  </tr>
+				<tr> <td>$arr[5] = $myvar;</td> <td>add_index_zval(arr, 5, myvar);</td>  </tr>
+				<tr> <td>$arr['abc'] = NULL;</td> <td>add_assoc_null(arr, "abc");</td> <td rowspan="6">添加一个给定类型的值到关联索引的数组中</td> </tr>
+				<tr> <td>$arr['def'] = 711;</td> <td>add_assoc_long(arr, "def", 711);</td>  </tr>
+				<tr> <td>$arr['ghi'] = true;</td> <td>add_assoc_bool(arr, "ghi", 1);</td>  </tr>
+				<tr> <td>$arr['jkl'] = 1.44;</td> <td>add_assoc_double(arr, "jkl", 1.44);</td>  </tr>
+				<tr> <td>$arr['mno'] = 'baz';</td> <td>add_assoc_string(arr, "mno", "baz", 1);</td>  </tr>
+				<tr> <td>$arr['pqr'] = $myvar;</td> <td>add_assoc_zval(arr, "pqr", myvar);</td>  </tr>
+			</table>
+			<p>就像宏 RETURN_STRING(), add_*_string() 函数最后一个参数使用0和1来表明字符串内容是否应该被复制. 他们每个函数还有一个亲密的姐妹函数以 add_*_stringl() 形式存在. 函数尾部的 l 表明字符串的长度需要显示提供(而不是让Zend 引擎调用strval()来确定, strval() 不是二进制安全函数); </p>
+			<p>使用二进制安全的形式就是在复制参数之前指定长度, 像这样: </p>
+			<pre>
+add_assoc_stringl(arr, "someStringVar", "baz", 3, 1);
+			</pre>
+			<p>使用 add_assoc_*() 函数, 所有数组的keys 假设不包含NULLs (add_assoc_*() 函数就key来讲, 他们本身自己不是二进制安全的). 不鼓励使用NULL作为数组的key(就像已存在的这个技巧用于 private 和 protected 对象属性), 完全没必要必要这么做, 你很快就能了解如何这么做, 当我们深入到zend_hash_*() 函数中时. </p>
+			<p>把刚刚学习的内容实践一下, 创建如下的函数, 返回一个数组到调用的程序中. 提示: 添加条目到php_hello.h 和 hello_functions[] 确保正确声明这个函数. </p>
+			<pre>
+PHP_FUNCTION(hello_array)
+{
+    char *mystr;
+    zval *mysubarray;
+    array_init(return_value);
+
+    add_index_long(return_value, 42, 123);
+
+    add_next_index_string(return_value, "I should now be found at index 43", 1);
+
+    add_next_index_stringl(return_value, "I'm at 44!", 10, 1);
+
+    mystr = estrdup("Forty Five");
+    add_next_index_string(return_value, mystr, 0);
+
+    add_assoc_double(return_value, "pi", 3.1415926535);
+
+    ALLOC_INIT_ZVAL(mysubarray);
+    array_init(mysubarray);
+    add_next_index_string(mysubarray, "hello", 1);
+    add_assoc_zval(return_value, "subarray", mysubarray);
+}
+			</pre>
+			<p> 创建这个扩展并且使用var_dump(hello_array())展示出来; 如下: </p>
+			<pre>
+array(6) {
+  [42]=&gt;
+  int(123)
+  [43]=&gt;
+  string(33) "I should now be found at index 43"
+  [44]=&gt;
+  string(10) "I'm at 44!"
+  [45]=&gt;
+  string(10) "Forty Five"
+  ["pi"]=&gt;
+  float(3.1415926535)
+  ["subarray"]=&gt;
+  array(1) {
+    [0]=&gt;
+    string(5) "hello"
+  }
+}
+			</pre>
+			<p>从返回的数组值来看, 他们意味着作为 zval** 从HashTable 直接提取, 使用ZENDAPI 中 zend_hash 函数族来实现. 让我们创建一个接收数组参数的函数: </p>
+			<pre>
+function hello_array_strings($arr) {
+    if (!is_array($arr)) return NULL;
+
+    printf("The array passed contains %d elements", count($arr));
+
+    foreach($arr as $data) {
+        if (is_string($data)) echo "$data";
+    }
+}
+			</pre>
+			<p>用 C 实现: </p>
+			<pre>
+PHP_FUNCTION(hello_array_strings)
+{
+    zval *arr, **data;
+    HashTable *arr_hash;
+    HashPosition pointer;
+    int array_count;
+    if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "a", &arr) == FAILURE) {
+        RETURN_NULL();
+    }
+
+    arr_hash = Z_ARRVAL_P(arr);
+    array_count = zend_hash_num_elements(arr_hash);
+
+    php_printf("The array passed contains %d elements", array_count);
+
+    for(zend_hash_internal_pointer_reset_ex(arr_hash, &pointer); zend_hash_get_current_data_ex(arr_hash, (void**) &data, &pointer) == SUCCESS; zend_hash_move_forward_ex(arr_hash, &pointer)) {
+
+        if (Z_TYPE_PP(data) == IS_STRING) {
+            PHPWRITE(Z_STRVAL_PP(data), Z_STRLEN_PP(data));
+            php_printf("
+");
+        }
+    }
+    RETURN_TRUE;
+}
+			</pre>
+			<p>在这个函数中, 为了保持函数的简洁性, 只有输出了字符串数组元素. 你也许想知道, 为什么我们不使用convert_to_string(), 就像之前在hello_greetme()函数中那样. 让我们展示一下(a shot 这里应该是一个镜头); 使用下面的代码替换上面的for 循环: </p>
+			<pre>
+    for(zend_hash_internal_pointer_reset_ex(arr_hash, &pointer); zend_hash_get_current_data_ex(arr_hash, (void**) &data, &pointer) == SUCCESS; zend_hash_move_forward_ex(arr_hash, &pointer)) {
+        convert_to_string_ex(data);
+        PHPWRITE(Z_STRVAL_PP(data), Z_STRLEN_PP(data));
+        php_printf("
+");
+    }
+			</pre>
+			<p>现在, 重新编译扩展, 并运行下面的php代码: </p>
+			<pre>
+&lt;?php
+$a = array('foo',123);
+var_dump($a);
+hello_array_strings($a);
+var_dump($a);
+?&gt;
+			</pre>
+			<p>注意, 原始数组被改变了! 请记住, convert_to_*() 函数和set_type() 的效果一样. 你正在使用传递进来相同的数组, 这里改变数组元素的类型, 也将会改变原始的变量. 为了避免这个情况, 你需要先复制一份zval. 我们来实践一下, 改变for循环: </p>
+			<pre>
+    for(zend_hash_internal_pointer_reset_ex(arr_hash, &pointer); zend_hash_get_current_data_ex(arr_hash, (void**) &data, &pointer) == SUCCESS; zend_hash_move_forward_ex(arr_hash, &pointer)) {
+        zval temp;
+
+        temp = **data;
+        zval_copy_ctor(&temp);
+        convert_to_string(&temp);
+        PHPWRITE(Z_STRVAL(temp), Z_STRLEN(temp));
+        php_printf("
+");
+        zval_dtor(&temp);
+    }
+			</pre>
+			<p>这个版本很明显, temp=**data 只复制了原始变量zval 的数组元素, 但是是zval 还可能包含额外的资源, 像char* 字符串, 或者 HashTable* 数组, 依赖资源需要使用zval_copy_ctor()复制. </p>
+			<p>如果你想要知道, 为什么我们没有使用zval_copy_ctor(), 当我们第一次介绍convert_to_string()时, 这是因为传递变量到函数中, 会自动完成原始变量的复制(zval). 这个是zval基本功能, 所以, 任何所属资源(比如数组原始和对象属性)仍然需要在使用之前分离他们(复制原始变量). </p>
+			<p>你已经看了数组的值的操作, 现在让我们看一下keys, 再延伸一下这个练习: </p>
+			<pre>
+for(zend_hash_internal_pointer_reset_ex(arr_hash, &pointer); zend_hash_get_current_data_ex(arr_hash, (void**) &data, &pointer) == SUCCESS; zend_hash_move_forward_ex(arr_hash, &pointer)) {
+    zval temp;
+    char *key;
+    int key_len;
+    long index;
+
+    if (zend_hash_get_current_key_ex(arr_hash, &key, &key_len, &index, 0, &pointer) == HASH_KEY_IS_STRING) {
+        PHPWRITE(key, key_len);
+    } else {
+        php_printf("%ld", index);
+    }
+
+    php_printf(" => ");
+
+    temp = **data;
+    zval_copy_ctor(&temp);
+    convert_to_string(&temp);
+    PHPWRITE(Z_STRVAL(temp), Z_STRLEN(temp));
+    php_printf("
+");
+    zval_dtor(&temp);
+}
+			</pre>
+			<p>请记住, 数组可以使用数字/字符串索引. 调用zend_hash_get_current_key_ex() 让数组可以从当前位置获取不同类型的数组, 以及决定返回值的类型(可能是 HASH_KEY_IS_STRING, HASH_KEY_IS_LONG, 或者HASH_KEY_NON_EXISTANT). 自从zend_hash_get_current_data_ex() 能够返回一个zval**, 你可以安全的假设HASH_KEY_NON_EXISTANT 将不会返回, 因此, 只有IS_STRING 和IS_LONG 可能需要进行检查. </p>
+			<p>这里有有另一种方式, 通过HashTable进行迭代. Zend 引擎暴露出三个非常简单的函数, 非常适合这个任务: zend_hash_apply(), zend_hash_apply_with_argument(), zen_hash_apply_with_arguments().  第一种形式仅仅使用HashTable 循环, 第二种形式允许传递单个参数作为一个void*, 第三种形式允许通过vararg 列表传递不限数量的参数. hello_array_walk() 展示着三种方式: </p>
+			<pre>
+static int php_hello_array_walk(zval **element TSRMLS_DC)
+{
+    zval temp;
+    temp = **element;
+    zval_copy_ctor(&temp);
+    convert_to_string(&temp);
+    PHPWRITE(Z_STRVAL(temp), Z_STRLEN(temp));
+    php_printf("
+");
+    zval_dtor(&temp);
+
+    return ZEND_HASH_APPLY_KEEP;
+}
+
+static int php_hello_array_walk_arg(zval **element, char *greeting TSRMLS_DC)
+{
+    php_printf("%s", greeting);
+    php_hello_array_walk(element TSRMLS_CC);
+
+    return ZEND_HASH_APPLY_KEEP;
+}
+
+static int php_hello_array_walk_args(zval **element, int num_args, var_list args, zend_hash_key *hash_key)
+{
+    char *prefix = va_arg(args, char*);
+    char *suffix = va_arg(args, char*);
+    TSRMLS_FETCH();
+
+    php_printf("%s", prefix);
+    php_hello_array_walk(element TSRMLS_CC);
+    php_printf("%s
+", suffix);
+
+    return ZEND_HASH_APPLY_KEEP;
+}
+
+PHP_FUNCTION(hello_array_walk)
+{
+    zval *zarray;
+    int print_newline = 1;
+
+    if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "a", &zarray) == FAILURE) {
+        RETURN_NULL();
+    }
+
+    zend_hash_apply(Z_ARRVAL_P(zarray), (apply_func_t)php_hello_array_walk TSRMLS_CC);
+    zend_hash_apply_with_argument(Z_ARRVAL_P(zarray), (apply_func_arg_t)php_hello_array_walk_arg, "Hello " TSRMLS_CC);
+    zend_hash_apply_with_arguments(Z_ARRVAL_P(zarray), (apply_func_args_t)php_hello_array_walk_args, 2, "Hello ", "Welcome to my extension!");
+
+    RETURN_TRUE;
+}
+			</pre>
+			<p>现在你应该足够熟悉上面代码中涉及的函数了. 数组传递给 hello_array_walk() 被遍历了3次, 一次没有参数, 一次使用单个参数, 一次使用两个参数. 在这个设计中, walk_arg() 和 walk_args() 函数实际上依靠无参函数walk() 完成zval类型转换和打印, 这三个函数中都要做这部分工作. </p>
+			<p>在这块代码中, 就像在大多你使用zend_hash_apply()的地方, apply() 函数返回ZEND_HASH_APPLY_KEEP. 这告诉zend_hash_apply()函数从HashTable的当前元素跳到下一个元素上. 提起他的返回值: ZEND_HASH_APPLY_REMOVE( 删除当前元素, 然后跳到下一个), ZEND_HASH_APPLY_STOP(在当前元素上停止移动, 并完全退出zend_hash_apply()函数)</p>
+			<p>不太熟悉的部分, 大概是TSRMLS_FETCH(). 就像第一章中, TSRMLS_* 宏是线程安全资源管理层的一部分, 保持线程间独立. 因为多参数版本的 zend_hash_apply()使用了一个vararg列表, 标记 tsrm_ls 并不会传递到walk()函数中. 为了恢复使用当我们回调到php_hello_array_walk()中时, 你的函数调用TSRMLS_FETCH()从资源池中查找出正确的线程(注意: 这个方法实质上要比直接传递参数慢, 所以只在无法避免时才使用). </p>
+			<p>遍历数组通常会使用foreach这种方法, 但是你经常是想通过索引查找指定的值. 下面的这个函数将返回一个数组中的元素, 基于第一个参数偏移值, 或者基于第二个参数具体索引值. </p>
+			<pre>
+PHP_FUNCTION(hello_array_value)
+{
+    zval *zarray, *zoffset, **zvalue;
+    long index = 0;
+    char *key = NULL;
+    int key_len = 0;
+    if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "az", &zarray, &zoffset) == FAILURE) {
+        RETURN_NULL();
+    }
+
+    switch (Z_TYPE_P(zoffset)) {
+        case IS_NULL:
+            index = 0;
+            break;
+        case IS_DOUBLE:
+           index = (long)Z_DVAL_P(zoffset);
+            break;
+        case IS_BOOL:
+        case IS_LONG:
+        case IS_RESOURCE:
+            index = Z_LVAL_P(zoffset);
+            break;
+        case IS_STRING:
+            key = Z_STRVAL_P(zoffset);
+            key_len = Z_STRLEN_P(zoffset);
+            break;
+        case IS_ARRAY:
+            key = "Array";
+            key_len = sizeof("Array") - 1;
+            break;
+        case IS_OBJECT:
+            key = "Object";
+            key_len = sizeof("Object") - 1;
+            break;
+        default:
+            key = "Unknown";
+            key_len = sizeof("Unknown") - 1;
+    }
+
+    if (key && zend_hash_find(Z_ARRVAL_P(zarray), key, key_len + 1, (void**)&zvalue) == FAILURE) {
+        RETURN_NULL();
+    } else if (!key && zend_hash_index_find(Z_ARRVAL_P(zarray), index, (void**)&zvalue) == FAILURE) {
+        RETURN_NULL();
+    }
+
+    *return_value = **zvalue;
+    zval_copy_ctor(return_value);
+}
+			</pre>
+			<p>这个函数一开始就使用switch 代码块转换数据类型, 就和Zend 引擎要做的事情一样. NULL被视为0, Boolean被视为0 或者 1, double 可以转换为long(处理过程中被缩短), resources 被转换他们数字(their numerical value). 资源处理转换时PHP3的遗留产物, 当资源真正用于查找的只是数字, 而且这并不是独立的类型. </p>
+			<p>数组和对象被简单处理为字符串 "Array" 或者 "Object", 因为转换没有实际意义. 最后默认的条件是放到隔离环境中, 避免这个扩展在PHP未来版本中编译, 未来版本可能会新增数据类型. </p>
+			<p>因为关联数组索引不能设置为NULL, 它可以该值决定是否应该使用基于一个关联或索引查找. 如果查找失败, 因为索引不存在, 函数因此返回NULL 来表示失败. 否则, zval会被复制到 return_value中.</p>
+		</div>
+	</section>
+	<section id="symbol_tables_as_arrays">
+		<div class="left">
+			<h2>Symbol Tables as Arrays</h2>
+			<p>If you’ve ever used the $GLOBALS array before, you know that every variable you declare and use in the global scope of a PHP script also appears in this array. Recalling that the internal representation of an array is a HashTable, one question comes to mind: “Is there some special place where the GLOBALS array can be found?” The answer is “Yes”. It’s in the Executor Globals structure as EG(symbol_table), which is of type HashTable (not HashTable*, mind you, just HashTable).</p>
+			<p>You already know how to find associatively keyed elements in an array, and now that you know where to find the global symbol table, it should be a cinch to look up variables from extension code:</p>
+			<pre>
+PHP_FUNCTION(hello_get_global_var)
+{
+    char *varname;
+    int varname_len;
+    zval **varvalue;
+    if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "s", &varname, &varname_len) == FAILURE) {
+        RETURN_NULL();
+    }
+
+    if (zend_hash_find(&EG(symbol_table), varname, varname_len + 1, (void**)&varvalue) == FAILURE) {
+        php_error_docref(NULL TSRMLS_CC, E_NOTICE, "Undefined variable: %s", varname);
+        RETURN_NULL();
+    }
+
+    *return_value = **varvalue;
+    zval_copy_ctor(return_value);
+}
+			</pre>
+			<p>This should all be intimately familiar to you by now. The function accepts a string parameter and uses that to find a variable in the global scope which it returns as a copy. </p>
+			<p>The one new item here is php_error_docref(). You’ll find this function, or a near sibling thereof, throughout the PHP source tree. The first parameter is an alternate documentation reference (the current function is used by default). Next is the ubiquitous TSRMLS_CC, followed by a severity level for the error, and finally there’s a printf() style format string and associated parameters for the actual text of the error message. It’s important to always provide some kind of meaningful error whenever your function reaches a failure condition. In fact, now would be a good time to go back and add an error statement to hello_array_value(). The Sanity Check section at the end of this tutorial will include these as well.</p>
+			<p>In addition to the global symbol table, the Zend Engine also keeps track of a reference to the local symbol table. Since internal functions don’t have symbol tables of their own (why would they need one after all?) the local symbol table actually refers to the local scope of the userland function that called the current internal function. Let’s look at a simple function which sets a variable in the local scope:</p>
+			<pre>
+
+PHP_FUNCTION(hello_set_local_var)
+{
+    zval *newvar;
+    char *varname;
+    int varname_len;
+    zval *value;
+    if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "sz", &varname, &varname_len, &value) == FAILURE) {
+        RETURN_NULL();
+    }
+
+    ALLOC_INIT_ZVAL(newvar);
+    *newvar = *value;
+    zval_copy_ctor(newvar);
+    zend_hash_add(EG(active_symbol_table), varname, varname_len + 1, &newvar, sizeof(zval*), NULL);
+
+    RETURN_TRUE;
+}
+			</pre>
+			<p>Absolutely nothing new here. Go ahead and build what you’ve got so far and run some test scripts against it. Make sure that what you expect to happen, does happen. </p>
+		</div>
+		<div class="right">
+			<h2>符号表(as Arrays)</h2>
+			<p>如果你之前使用过 $GLOBALS 数组, 在PHP脚本的全局变量作用域中, 你声明的每个变量都会出现在这个数组中. 回忆一下, 数组的本质就是HashTable, 一个问题跳出: "是否有一个特殊的地方找到全局数组?", 答案是"是的". 全局变量在结构体Executor Globals(EG (symbol_table))中, 这个结构只是HashTable, 不是HashTable*, 提醒一下, 只是HashTable. </p>
+			<p>你已经知道如何查找关联数组的元素, 现在你也就知道如何在全局符号表中查找了, 在扩展代码中查找比较靠谱: </p>
+			<pre>
+PHP_FUNCTION(hello_get_global_var)
+{
+    char *varname;
+    int varname_len;
+    zval **varvalue;
+    if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "s", &varname, &varname_len) == FAILURE) {
+        RETURN_NULL();
+    }
+
+    if (zend_hash_find(&EG(symbol_table), varname, varname_len + 1, (void**)&varvalue) == FAILURE) {
+        php_error_docref(NULL TSRMLS_CC, E_NOTICE, "Undefined variable: %s", varname);
+        RETURN_NULL();
+    }
+
+    *return_value = **varvalue;
+    zval_copy_ctor(return_value);
+}
+			</pre>
+			<p>这些现在应该很熟悉了. 函数接收一个string 参数, 然后使用它查找全局域中的变量, 并返回一个副本.</p>
+			<p>一个新的函数php_error_docref(). 你可以通过PHP源码树查到这个函数, 或者姊妹函数. 第一个参数是备用文档指向(当前函数使用默认值), 下一个参数是 无处不在的TSRMLS_CC, 接下来是错误程度级别, 后面就是printf样式的字符串和相应参数(主要错误信息). 每当你的函数触发了失败或者错误条件, 它总是用来提供各种各样有意义的错误. 实际上, 这时, 应该回到函数hello_array_value() 并增加错误信息. 在检查检查代码一节的结尾处, 会包含这部分代码.</p>
+			<p>除了全局符号表, Zend 引擎还跟踪一个局部变量符号表的引用. 因为内部函数没有他们自己的符号表(为什么他们需要一个?), 局部符号表实际上指向局部作用域(被内部函数调用的用户函数). 我们看一个简单的函数设置一个局部变量: </p>
+			<pre>
+PHP_FUNCTION(hello_set_local_var)
+{
+    zval *newvar;
+    char *varname;
+    int varname_len;
+    zval *value;
+    if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "sz", &varname, &varname_len, &value) == FAILURE) {
+        RETURN_NULL();
+    }
+
+    ALLOC_INIT_ZVAL(newvar);
+    *newvar = *value;
+    zval_copy_ctor(newvar);
+    zend_hash_add(EG(active_symbol_table), varname, varname_len + 1, &newvar, sizeof(zval*), NULL);
+
+    RETURN_TRUE;
+}
+			</pre>
+			<p>这里完全没有新东西. 直接编译并写些脚本运行一下, 保证你所期待发生的内容发生.</p>
+		</div>
+	</section>
+	<section id="reference_counting">
+		<div class="left">
+			<h2>Reference Counting</h2>
+			<p>So far, the only zvals we’ve added to HashTables have been newly created or freshly copied ones. They’ve stood alone, occupying their own resources and living nowhere but that one HashTable. As a language design concept, this approach to creating and copying variables is “good enough”, but since you’re accustomed to programming in C, you know that it’s not uncommon to save memory and CPU time by not copying a large block of data unless you absolutely have to. Consider this userspace block of code:</p>
+			<pre>
+&lt;?php
+    $a = file_get_contents('fourMegabyteLogFile.log');
+    $b = $a;
+    unset($a);
+
+?&gt;
+			</pre>
+			<p>If $a were copied to $b by doing a zval_copy_ctor() (which performs an estrndup() on the string contents in the process) then this short script would actually use up eight megabytes of memory to store two identical copies of the four megabyte file. Unsetting $a in the final step only adds insult to injury, since the original string gets efree()d. Had this been done in C it would have been a simple matter of: b = a; a = NULL;</p>
+			<p>Fortunately, the Zend Engine is a bit smarter than that. When $a is first created, an underlying zval is made for it of type string, with the contents of the log file. That zval is assigned to the $a variable through a call to zend_hash_add(). When $a is copied to $b, however, the Engine does something similar to the following:</p>
+			<pre>
+{
+    zval **value;
+    zend_hash_find(EG(active_symbol_table), "a", sizeof("a"), (void**)&value);
+
+    ZVAL_ADDREF(*value);
+
+    zend_hash_add(EG(active_symbol_table), "b", sizeof("b"), value, sizeof(zval*));
+}
+			</pre>
+			<p>Of course, the real code is much more complex, but the important part to focus on here is ZVAL_ADDREF(). Remember that there are four principle elements in a zval. You’ve already seen type and value; this time you’re working with refcount. As the name may imply, refcount is a counter of the number of times a particular zval is referenced in a symbol table, array, or elsewhere.</p>
+			<p>When you used ALLOC_INIT_ZVAL(), refcount this was set to 1 so you didn’t have to do anything with it in order to return it or add it into a HashTable a single time. In the code block above, you’ve retrieved a zval from a HashTable, but not removed it, so it has a refcount which matches the number of places it’s already referenced from. In order to reference it from another location, you need to increase its reference count.</p>
+			<p>When the userspace code calls unset($a), the Engine performs a zval_ptr_dtor() on the variable. What you didn’t see, in prior uses of zval_ptr_dtor(), is that this call doesn’t necessarily destroy the zval and all its contents. What it actually does is decrease its refcount. If, and only if, the refcount reaches zero, does the Zend Engine destroy the zval…</p>
+		</div>
+		<div class="right">
+			<h2>引用计数</h2>
+			<p>到目前为止, 我们添加到HashTable中唯一的zvals(), 新创建的或刚复制的. 他们独占自己的资源 HashTable. 作为语言设计的一个概念, 创建和复制变量的方法已经足够好了, 但是自从你已经习惯了C编程, 你会知道, 这不是一个常见的节约内存和CPU时间的方法(复制一个大数据块时, 你绝对能感受到). 考虑一下这段代码: </p>
+			<pre>
+&lt;?php
+    $a = file_get_contents('fourMegabyteLogFile.log');
+    $b = $a;
+    unset($a);
+
+?&gt;
+			</pre>
+			<p>如果使用zval_copy_ctor()复制 $a 到 $b (执行一个estrndup() 在字符串内容的处理过程中), 这个小小的脚本会实际会占用8M内存来存储两个相同的4m文件. 最后一步释放$a, 只是加重了性能损耗, 直到原始字符串调用efree()释放资源. 这些在C中完成后, 会发现: b = a; a = NULL;</p>
+			<p>幸运的是, Zend 引擎更聪明些. 当$a 首次创建, 一个潜在的字符串类型的 zval 为$a创建, 带有日志文件的内容. 通过调用 zend_hash_add(), zval 被分配给$a 变量. 当 $a 复制给$b, 然而,  Zend 引擎做了类似下面的代码:
+			<pre>
+{
+    zval **value;
+    zend_hash_find(EG(active_symbol_table), "a", sizeof("a"), (void**)&value);
+
+    ZVAL_ADDREF(*value);
+
+    zend_hash_add(EG(active_symbol_table), "b", sizeof("b"), value, sizeof(zval*));
+}
+			</pre>
+			<p>当然了, 真实的代码相当复杂, 但是重要的部分是ZVAL_ADDREF(). 还记得吗, zval有四个根本的元素. 你已经看到类型和值; 这次, 你会接触到 refcount. 就像他的名字意味着, refcount 是特殊 zval 的引用计数, 在符号表/数组/其它地方.</p>
+			<p>当你使用了ALLOC_INIT_ZVAL(), refcount 设置为1, 所以没有做任何事, 为了一次性返回或者添加它到HashTable中. 在上面的代码块中, 你从HashTable中重新获取zval, 但是没有移除它, refcount 和引用的地方总和一致. 为了从其他地方引用它, 你需要引用数量.</p>
+			<p>当用户调用unset($a), Zend 引擎在变量上执行zval_ptr_dtor(). 你没有看到的是, 在前面使用zval_ptr_dtor(), 这个调用没有必要销毁zval 以及它的内容. 实际上的操作是减少refcount 引用值. 如果, 只是如果, refcount 等于0, Zend 引擎会销毁 zval.</p>
+		</div>
+	</section>
+	<section id="copies_versus_references">
+		<div class="left">
+			<h2>Copies versus References</h2>
+			<p>There are two ways to reference a zval. The first, demonstrated above, is known as copy-on-write referencing. The second form, full referencing, is what a userspace script writer is more familiar with in relationship to the word “reference” and occurs with userspace code like: $a = &$b;.</p>
+			<p>In a zval, these two types are differentiated with the member value is_ref, which will be 0 for copy references, and non-zero for full references. Note that it’s not possible for a zval to be both a copy style reference and a full reference. So if a variable starts off being is_ref, and is then assigned to a new variable as a copy, a full copy must be performed. Consider the following userspace code:</p>
+			<pre>
+&lt;?php
+    $a = 1;
+    $b = &$a;
+    $c = $a;
+
+?&gt;
+			</pre>
+			<p>In this block of code, a zval is created for $a, initially with is_ref set to 0 and refcount set to 1. When $a is referenced to $b, is_ref gets changed to 1, and refcount increases to 2. When a copy is made into $c, the Zend Engine can’t just simply increase the refcount to 3 since $c would then be seen as a full reference to $a. Turning off is_ref wouldn’t work either since $b would now be seen as a copy of $a, rather than a reference. So at this point a new zval is allocated, and the value of the original is copied into it with zval_copy_ctor(). The original zval is left with is_ref==1 and refcount==2, while the new zval has is_ref=0 and refcount=1. Now look at that same code block done in a slightly different order:</p>
+			<pre>
+&lt;?php
+    $a = 1;
+    $c = $a;
+    $b = &$a;
+?&gt;
+			</pre>
+			<p>The end result is the same, with $b being a full reference to $a, and $c being a copy of $a. This time, however, the internal actions are slightly different. As before, a new zval is created for $a at the beginning with is_ref==0 and refcount=1. The $c = $a; statement then assigns the same zval to the $c variable while incrementing the refcount to 2, and leaving is_ref as 0. When the Zend Engine encounters $b = &$a; it wants to just set is_ref to 1, but of course can’t since that would impact $c. Instead it creates a new zval and copies the contents of the original into it with zval_copy_ctor(), then decrements refcount in the original zval to signify that $a is no longer using that zval. Instead, it sets the new zval‘s is_ref to 1, its refcount to 2, and updates the $a and $b variables to refer to it.</p>
+		</div>
+		<div class="right">
+			<h2>复制和引用</h2>
+			<p>有两种方式引用zval. 第一个, 就像上面演示的, copy-on-write 复制引用方式. 第二种形式, 全引用, $a=&$b; 这个是PHP开发者非常熟悉的一种引用方式.</p>
+			<p>在 zval 中, 这两种引用类型是通过is_ref值来区分的, is_ref=0 复制引用, is_ref!=0 引用.  注意, zval 不可能既是复制引用又是全引用. 所以变量如果一开始使用is_ref, 那么然后会被分配一个新的变量副本, 一个全拷贝必须执行. 看一下代码: </p>
+			<pre>
+&lt;?php
+    $a = 1;
+    $b = &$a;
+    $c = $a;
+
+?&gt;
+			</pre>
+			<p>在下面的代码中, 一个zval 为$a 而创建, 最初, is_ref=0, refcount=1. 当$a 被 $b引用了, is_ref = 1, refcount = 2. 当$a 被 $c 复制引用, Zend 引擎不能够简单的作为全引用 refcount+1=3. 关闭is_ref= 0 则会影响$b的数据. 所以这个时候, 一个新的zval被分配, 最初的数据(refcount, is_ref) 是从zval_copy_ctor()复制过来的. 最原始的zval 目前状态is_ref=1 refcount=2, 而新的zval 的状态是: is_ref=0, recount=1. 现在看看下面的代码, 稍微不同的顺序:</p>
+			<pre>
+&lt;?php
+    $a = 1;
+    $c = $a;
+    $b = &$a;
+?&gt;
+			</pre>
+			<p>最终的结果是一样的, $b全引用$a, $c 作为$a的副本. 这次, 当然, 内部函数有一点点不同. 前面, 一个新的zval 为 $a而创建, 初始状态is_ref=0 与 refcount=1. $c = $a 表达式, 分配了同样的zval给$c, refcount=2, is_ref=0不变. 当Zend引擎执行到$b=&$a; 时, 他想要设置is_ref = 1, 但是, 当然了, 无法这么做. 反而, 创建一个新的zval 并复制原始内容到 zval_copy_ctor(), 然后减少原始zval的refcount, 以表明 $a 不再使用之前的zval. 相反, 设置新的zval is_ref=1, refcount = 2, 并更新$a 和 $b变量指向它.</p>
+		</div>
+	</section>
+	<section id="sanity_check">
+		<div class="left">
+			<h2>Sanity Check</h2>
+			<p>As before, the complete code listing for our three primary files is provided whole and intact below:</p>
+			<h3>config.m4</h3>
+			<pre>
+PHP_ARG_ENABLE(hello, [whether to enable Hello World support],
+[ --enable-hello   Enable Hello World support])
+if test "$PHP_HELLO" = "yes"; then
+  AC_DEFINE(HAVE_HELLO, 1, [Whether you have Hello World])
+  PHP_NEW_EXTENSION(hello, hello.c, $ext_shared)
+fi
+			</pre>
+			<h3>php_hello.h</h3>
+			<pre>
+#ifndef PHP_HELLO_H
+#define PHP_HELLO_H 1
+#ifdef ZTS
+#include "TSRM.h"
+#endif
+
+ZEND_BEGIN_MODULE_GLOBALS(hello)
+    long counter;
+    zend_bool direction;
+ZEND_END_MODULE_GLOBALS(hello)
+
+#ifdef ZTS
+#define HELLO_G(v) TSRMG(hello_globals_id, zend_hello_globals *, v)
+#else
+#define HELLO_G(v) (hello_globals.v)
+#endif
+
+#define PHP_HELLO_WORLD_VERSION "1.0"
+#define PHP_HELLO_WORLD_EXTNAME "hello"
+
+PHP_MINIT_FUNCTION(hello);
+PHP_MSHUTDOWN_FUNCTION(hello);
+PHP_RINIT_FUNCTION(hello);
+
+PHP_FUNCTION(hello_world);
+PHP_FUNCTION(hello_long);
+PHP_FUNCTION(hello_double);
+PHP_FUNCTION(hello_bool);
+PHP_FUNCTION(hello_null);
+PHP_FUNCTION(hello_greetme);
+PHP_FUNCTION(hello_add);
+PHP_FUNCTION(hello_dump);
+PHP_FUNCTION(hello_array);
+PHP_FUNCTION(hello_array_strings);
+PHP_FUNCTION(hello_array_walk);
+PHP_FUNCTION(hello_array_value);
+PHP_FUNCTION(hello_get_global_var);
+PHP_FUNCTION(hello_set_local_var);
+
+extern zend_module_entry hello_module_entry;
+#define phpext_hello_ptr &hello_module_entry
+
+#endif
+			</pre>
+			<h3>hello.c</h3>
+			<pre>
+#ifdef HAVE_CONFIG_H
+#include "config.h"
+#endif
+#include "php.h"
+#include "php_ini.h"
+#include "php_hello.h"
+
+ZEND_DECLARE_MODULE_GLOBALS(hello)
+
+static function_entry hello_functions[] = {
+    PHP_FE(hello_world, NULL)
+    PHP_FE(hello_long, NULL)
+    PHP_FE(hello_double, NULL)
+    PHP_FE(hello_bool, NULL)
+    PHP_FE(hello_null, NULL)
+    PHP_FE(hello_greetme, NULL)
+    PHP_FE(hello_add, NULL)
+    PHP_FE(hello_dump, NULL)
+    PHP_FE(hello_array, NULL)
+    PHP_FE(hello_array_strings, NULL)
+    PHP_FE(hello_array_walk, NULL)
+    PHP_FE(hello_array_value, NULL)
+    PHP_FE(hello_get_global_var, NULL)
+    PHP_FE(hello_set_local_var, NULL)
+    {NULL, NULL, NULL}
+};
+
+zend_module_entry hello_module_entry = {
+#if ZEND_MODULE_API_NO >= 20010901
+    STANDARD_MODULE_HEADER,
+#endif
+    PHP_HELLO_WORLD_EXTNAME,
+    hello_functions,
+    PHP_MINIT(hello),
+    PHP_MSHUTDOWN(hello),
+    PHP_RINIT(hello),
+    NULL,
+    NULL,
+#if ZEND_MODULE_API_NO >= 20010901
+    PHP_HELLO_WORLD_VERSION,
+#endif
+    STANDARD_MODULE_PROPERTIES
+};
+
+#ifdef COMPILE_DL_HELLO
+    ZEND_GET_MODULE(hello)
+#endif
+
+PHP_INI_BEGIN()
+    PHP_INI_ENTRY("hello.greeting", "Hello World", PHP_INI_ALL, NULL)
+    STD_PHP_INI_ENTRY("hello.direction", "1", PHP_INI_ALL, OnUpdateBool, direction, zend_hello_globals, hello_globals)
+PHP_INI_END()
+
+static void php_hello_init_globals(zend_hello_globals *hello_globals)
+{
+    hello_globals->direction = 1;
+}
+
+PHP_RINIT_FUNCTION(hello)
+{
+    HELLO_G(counter) = 0;
+
+    return SUCCESS;
+}
+
+PHP_MINIT_FUNCTION(hello)
+{
+    ZEND_INIT_MODULE_GLOBALS(hello, php_hello_init_globals, NULL);
+
+    REGISTER_INI_ENTRIES();
+
+    return SUCCESS;
+}
+
+PHP_MSHUTDOWN_FUNCTION(hello)
+{
+    UNREGISTER_INI_ENTRIES();
+
+    return SUCCESS;
+}
+
+PHP_FUNCTION(hello_world)
+{
+    RETURN_STRING("Hello World", 1);
+}
+
+PHP_FUNCTION(hello_long)
+{
+    if (HELLO_G(direction)) {
+        HELLO_G(counter)++;
+    } else {
+        HELLO_G(counter)--;
+    }
+
+    RETURN_LONG(HELLO_G(counter));
+}
+
+PHP_FUNCTION(hello_double)
+{
+    RETURN_DOUBLE(3.1415926535);
+}
+
+PHP_FUNCTION(hello_bool)
+{
+    RETURN_BOOL(1);
+}
+
+PHP_FUNCTION(hello_null)
+{
+    RETURN_NULL();
+}
+
+PHP_FUNCTION(hello_greetme)
+{
+    zval *zname;
+
+    if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "z", &zname) == FAILURE) {
+        RETURN_NULL();
+    }
+
+    convert_to_string(zname);
+
+    php_printf("Hello ");
+    PHPWRITE(Z_STRVAL_P(zname), Z_STRLEN_P(zname));
+    php_printf("
+");
+
+    RETURN_TRUE;
+}
+
+PHP_FUNCTION(hello_add)
+{
+    long a;
+    double b;
+    zend_bool return_long = 0;
+
+    if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "ld|b", &a, &b, &return_long) == FAILURE) {
+        RETURN_NULL();
+    }
+
+    if (return_long) {
+        RETURN_LONG(a + b);
+    } else {
+        RETURN_DOUBLE(a + b);
+    }
+}
+
+PHP_FUNCTION(hello_dump)
+{
+    zval *uservar;
+
+    if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "z", &uservar) == FAILURE) {
+    RETURN_NULL();
+    }
+
+    switch (Z_TYPE_P(uservar)) {
+    case IS_NULL:
+        php_printf("NULL
+");
+        break;
+    case IS_BOOL:
+        php_printf("Boolean: %s
+", Z_LVAL_P(uservar) ? "TRUE" : "FALSE");
+        break;
+    case IS_LONG:
+        php_printf("Long: %ld
+", Z_LVAL_P(uservar));
+        break;
+    case IS_DOUBLE:
+        php_printf("Double: %f
+", Z_DVAL_P(uservar));
+        break;
+    case IS_STRING:
+        php_printf("String: ");
+        PHPWRITE(Z_STRVAL_P(uservar), Z_STRLEN_P(uservar));
+        php_printf("
+");
+        break;
+    case IS_RESOURCE:
+        php_printf("Resource
+");
+        break;
+    case IS_ARRAY:
+        php_printf("Array
+");
+        break;
+    case IS_OBJECT:
+        php_printf("Object
+");
+        break;
+    default:
+        php_printf("Unknown
+");
+    }
+
+    RETURN_TRUE;
+}
+
+PHP_FUNCTION(hello_array)
+{
+    char *mystr;
+    zval *mysubarray;
+
+    array_init(return_value);
+
+    add_index_long(return_value, 42, 123);
+
+    add_next_index_string(return_value, "I should now be found at index 43", 1);
+
+    add_next_index_stringl(return_value, "I'm at 44!", 10, 1);
+
+    mystr = estrdup("Forty Five");
+    add_next_index_string(return_value, mystr, 0);
+
+    add_assoc_double(return_value, "pi", 3.1415926535);
+
+    ALLOC_INIT_ZVAL(mysubarray);
+    array_init(mysubarray);
+    add_next_index_string(mysubarray, "hello", 1);
+    php_printf("mysubarray->refcount = %d
+", mysubarray->refcount);
+    mysubarray->refcount = 2;
+    php_printf("mysubarray->refcount = %d
+", mysubarray->refcount);
+    add_assoc_zval(return_value, "subarray", mysubarray);
+
+    php_printf("mysubarray->refcount = %d
+", mysubarray->refcount);
+}
+
+PHP_FUNCTION(hello_array_strings)
+{
+    zval *arr, **data;
+    HashTable *arr_hash;
+    HashPosition pointer;
+    int array_count;
+
+    if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "a", &arr) == FAILURE) {
+        RETURN_NULL();
+    }
+
+    arr_hash = Z_ARRVAL_P(arr);
+    array_count = zend_hash_num_elements(arr_hash);
+
+    php_printf("The array passed contains %d elements
+", array_count);
+
+    for(zend_hash_internal_pointer_reset_ex(arr_hash, &pointer); zend_hash_get_current_data_ex(arr_hash, (void**) &data, &pointer) == SUCCESS; zend_hash_move_forward_ex(arr_hash, &pointer)) {
+
+        zval temp;
+        char *key;
+        int key_len;
+        long index;
+
+        if (zend_hash_get_current_key_ex(arr_hash, &key, &key_len, &index, 0, &pointer) == HASH_KEY_IS_STRING) {
+            PHPWRITE(key, key_len);
+        } else {
+            php_printf("%ld", index);
+        }
+
+        php_printf(" => ");
+
+        temp = **data;
+        zval_copy_ctor(&temp);
+        convert_to_string(&temp);
+        PHPWRITE(Z_STRVAL(temp), Z_STRLEN(temp));
+        php_printf("
+");
+        zval_dtor(&temp);
+    }
+
+    RETURN_TRUE;
+}
+
+static int php_hello_array_walk(zval **element TSRMLS_DC)
+{
+    zval temp;
+
+    temp = **element;
+    zval_copy_ctor(&temp);
+    convert_to_string(&temp);
+    PHPWRITE(Z_STRVAL(temp), Z_STRLEN(temp));
+    php_printf("
+");
+    zval_dtor(&temp);
+
+    return ZEND_HASH_APPLY_KEEP;
+}
+
+static int php_hello_array_walk_arg(zval **element, char *greeting TSRMLS_DC)
+{
+    php_printf("%s", greeting);
+    php_hello_array_walk(element TSRMLS_CC);
+
+    return ZEND_HASH_APPLY_KEEP;
+}
+
+static int php_hello_array_walk_args(zval **element, int num_args, var_list args, zend_hash_key *hash_key)
+{
+    char *prefix = va_arg(args, char*);
+    char *suffix = va_arg(args, char*);
+    TSRMLS_FETCH();
+
+    php_printf("%s", prefix);
+    php_hello_array_walk(element TSRMLS_CC);
+    php_printf("%s
+", suffix);
+
+    return ZEND_HASH_APPLY_KEEP;
+}
+
+PHP_FUNCTION(hello_array_walk)
+{
+    zval *zarray;
+    int print_newline = 1;
+
+    if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "a", &zarray) == FAILURE) {
+        RETURN_NULL();
+    }
+
+    zend_hash_apply(Z_ARRVAL_P(zarray), (apply_func_t)php_hello_array_walk TSRMLS_CC);
+    zend_hash_internal_pointer_reset(Z_ARRVAL_P(zarray));
+    zend_hash_apply_with_argument(Z_ARRVAL_P(zarray), (apply_func_arg_t)php_hello_array_walk_arg, "Hello " TSRMLS_CC);
+    zend_hash_apply_with_arguments(Z_ARRVAL_P(zarray), (apply_func_args_t)php_hello_array_walk_args, 2, "Hello ", "Welcome to my extension!");
+
+    RETURN_TRUE;
+}
+
+PHP_FUNCTION(hello_array_value)
+{
+    zval *zarray, *zoffset, **zvalue;
+    long index = 0;
+    char *key = NULL;
+    int key_len = 0;
+
+    if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "az", &zarray, &zoffset) == FAILURE) {
+    RETURN_NULL();
+    }
+
+    switch (Z_TYPE_P(zoffset)) {
+    case IS_NULL:
+        index = 0;
+        break;
+    case IS_DOUBLE:
+        index = (long)Z_DVAL_P(zoffset);
+        break;
+    case IS_BOOL:
+    case IS_LONG:
+    case IS_RESOURCE:
+        index = Z_LVAL_P(zoffset);
+        break;
+    case IS_STRING:
+        key = Z_STRVAL_P(zoffset);
+        key_len = Z_STRLEN_P(zoffset);
+        break;
+    case IS_ARRAY:
+        key = "Array";
+        key_len = sizeof("Array") - 1;
+        break;
+    case IS_OBJECT:
+        key = "Object";
+        key_len = sizeof("Object") - 1;
+        break;
+    default:
+        key = "Unknown";
+        key_len = sizeof("Unknown") - 1;
+    }
+
+    if (key && zend_hash_find(Z_ARRVAL_P(zarray), key, key_len + 1, (void**)&zvalue) == FAILURE) {
+        php_error_docref(NULL TSRMLS_CC, E_NOTICE, "Undefined index: %s", key);
+        RETURN_NULL();
+    } else if (!key && zend_hash_index_find(Z_ARRVAL_P(zarray), index, (void**)&zvalue) == FAILURE) {
+        php_error_docref(NULL TSRMLS_CC, E_NOTICE, "Undefined index: %ld", index);
+        RETURN_NULL();
+    }
+
+    *return_value = **zvalue;
+    zval_copy_ctor(return_value);
+}
+
+PHP_FUNCTION(hello_get_global_var)
+{
+    char *varname;
+    int varname_len;
+    zval **varvalue;
+
+    if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "s", &varname, &varname_len) == FAILURE) {
+        RETURN_NULL();
+    }
+
+    if (zend_hash_find(&EG(symbol_table), varname, varname_len + 1, (void**)&varvalue) == FAILURE) {
+        php_error_docref(NULL TSRMLS_CC, E_NOTICE, "Undefined variable: %s", varname);
+        RETURN_NULL();
+    }
+
+    *return_value = **varvalue;
+    zval_copy_ctor(return_value);
+}
+
+PHP_FUNCTION(hello_set_local_var)
+{
+    zval *newvar;
+    char *varname;
+    int varname_len;
+    zval *value;
+
+    if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "sz", &varname, &varname_len, &value) == FAILURE) {
+        RETURN_NULL();
+    }
+
+    ALLOC_INIT_ZVAL(newvar);
+    *newvar = *value;
+    zval_copy_ctor(newvar);
+
+    zend_hash_add(EG(active_symbol_table), varname, varname_len + 1, &newvar, sizeof(zval*), NULL);
+
+    RETURN_TRUE;
+}
+			</pre>
+		</div>
+		<div class="right">
+			<h2>细心检查</h2>
+			<p>和之前一样, 完整的代码展示出来: </p>
+			<h3>config.m4</h3>
+			<pre>
+PHP_ARG_ENABLE(hello, [whether to enable Hello World support],
+[ --enable-hello   Enable Hello World support])
+if test "$PHP_HELLO" = "yes"; then
+  AC_DEFINE(HAVE_HELLO, 1, [Whether you have Hello World])
+  PHP_NEW_EXTENSION(hello, hello.c, $ext_shared)
+fi
+			</pre>
+			<h3>php_hello.h</h3>
+			<pre>
+#ifndef PHP_HELLO_H
+#define PHP_HELLO_H 1
+#ifdef ZTS
+#include "TSRM.h"
+#endif
+
+ZEND_BEGIN_MODULE_GLOBALS(hello)
+    long counter;
+    zend_bool direction;
+ZEND_END_MODULE_GLOBALS(hello)
+
+#ifdef ZTS
+#define HELLO_G(v) TSRMG(hello_globals_id, zend_hello_globals *, v)
+#else
+#define HELLO_G(v) (hello_globals.v)
+#endif
+
+#define PHP_HELLO_WORLD_VERSION "1.0"
+#define PHP_HELLO_WORLD_EXTNAME "hello"
+
+PHP_MINIT_FUNCTION(hello);
+PHP_MSHUTDOWN_FUNCTION(hello);
+PHP_RINIT_FUNCTION(hello);
+
+PHP_FUNCTION(hello_world);
+PHP_FUNCTION(hello_long);
+PHP_FUNCTION(hello_double);
+PHP_FUNCTION(hello_bool);
+PHP_FUNCTION(hello_null);
+PHP_FUNCTION(hello_greetme);
+PHP_FUNCTION(hello_add);
+PHP_FUNCTION(hello_dump);
+PHP_FUNCTION(hello_array);
+PHP_FUNCTION(hello_array_strings);
+PHP_FUNCTION(hello_array_walk);
+PHP_FUNCTION(hello_array_value);
+PHP_FUNCTION(hello_get_global_var);
+PHP_FUNCTION(hello_set_local_var);
+
+extern zend_module_entry hello_module_entry;
+#define phpext_hello_ptr &hello_module_entry
+
+#endif
+			</pre>
+			<h3>hello.c</h3>
+			<pre>
+#ifdef HAVE_CONFIG_H
+#include "config.h"
+#endif
+#include "php.h"
+#include "php_ini.h"
+#include "php_hello.h"
+
+ZEND_DECLARE_MODULE_GLOBALS(hello)
+
+static function_entry hello_functions[] = {
+    PHP_FE(hello_world, NULL)
+    PHP_FE(hello_long, NULL)
+    PHP_FE(hello_double, NULL)
+    PHP_FE(hello_bool, NULL)
+    PHP_FE(hello_null, NULL)
+    PHP_FE(hello_greetme, NULL)
+    PHP_FE(hello_add, NULL)
+    PHP_FE(hello_dump, NULL)
+    PHP_FE(hello_array, NULL)
+    PHP_FE(hello_array_strings, NULL)
+    PHP_FE(hello_array_walk, NULL)
+    PHP_FE(hello_array_value, NULL)
+    PHP_FE(hello_get_global_var, NULL)
+    PHP_FE(hello_set_local_var, NULL)
+    {NULL, NULL, NULL}
+};
+
+zend_module_entry hello_module_entry = {
+#if ZEND_MODULE_API_NO >= 20010901
+    STANDARD_MODULE_HEADER,
+#endif
+    PHP_HELLO_WORLD_EXTNAME,
+    hello_functions,
+    PHP_MINIT(hello),
+    PHP_MSHUTDOWN(hello),
+    PHP_RINIT(hello),
+    NULL,
+    NULL,
+#if ZEND_MODULE_API_NO >= 20010901
+    PHP_HELLO_WORLD_VERSION,
+#endif
+    STANDARD_MODULE_PROPERTIES
+};
+
+#ifdef COMPILE_DL_HELLO
+    ZEND_GET_MODULE(hello)
+#endif
+
+PHP_INI_BEGIN()
+    PHP_INI_ENTRY("hello.greeting", "Hello World", PHP_INI_ALL, NULL)
+    STD_PHP_INI_ENTRY("hello.direction", "1", PHP_INI_ALL, OnUpdateBool, direction, zend_hello_globals, hello_globals)
+PHP_INI_END()
+
+static void php_hello_init_globals(zend_hello_globals *hello_globals)
+{
+    hello_globals->direction = 1;
+}
+
+PHP_RINIT_FUNCTION(hello)
+{
+    HELLO_G(counter) = 0;
+
+    return SUCCESS;
+}
+
+PHP_MINIT_FUNCTION(hello)
+{
+    ZEND_INIT_MODULE_GLOBALS(hello, php_hello_init_globals, NULL);
+
+    REGISTER_INI_ENTRIES();
+
+    return SUCCESS;
+}
+
+PHP_MSHUTDOWN_FUNCTION(hello)
+{
+    UNREGISTER_INI_ENTRIES();
+
+    return SUCCESS;
+}
+
+PHP_FUNCTION(hello_world)
+{
+    RETURN_STRING("Hello World", 1);
+}
+
+PHP_FUNCTION(hello_long)
+{
+    if (HELLO_G(direction)) {
+        HELLO_G(counter)++;
+    } else {
+        HELLO_G(counter)--;
+    }
+
+    RETURN_LONG(HELLO_G(counter));
+}
+
+PHP_FUNCTION(hello_double)
+{
+    RETURN_DOUBLE(3.1415926535);
+}
+
+PHP_FUNCTION(hello_bool)
+{
+    RETURN_BOOL(1);
+}
+
+PHP_FUNCTION(hello_null)
+{
+    RETURN_NULL();
+}
+
+PHP_FUNCTION(hello_greetme)
+{
+    zval *zname;
+
+    if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "z", &zname) == FAILURE) {
+        RETURN_NULL();
+    }
+
+    convert_to_string(zname);
+
+    php_printf("Hello ");
+    PHPWRITE(Z_STRVAL_P(zname), Z_STRLEN_P(zname));
+    php_printf("
+");
+
+    RETURN_TRUE;
+}
+
+PHP_FUNCTION(hello_add)
+{
+    long a;
+    double b;
+    zend_bool return_long = 0;
+
+    if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "ld|b", &a, &b, &return_long) == FAILURE) {
+        RETURN_NULL();
+    }
+
+    if (return_long) {
+        RETURN_LONG(a + b);
+    } else {
+        RETURN_DOUBLE(a + b);
+    }
+}
+
+PHP_FUNCTION(hello_dump)
+{
+    zval *uservar;
+
+    if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "z", &uservar) == FAILURE) {
+    RETURN_NULL();
+    }
+
+    switch (Z_TYPE_P(uservar)) {
+    case IS_NULL:
+        php_printf("NULL
+");
+        break;
+    case IS_BOOL:
+        php_printf("Boolean: %s
+", Z_LVAL_P(uservar) ? "TRUE" : "FALSE");
+        break;
+    case IS_LONG:
+        php_printf("Long: %ld
+", Z_LVAL_P(uservar));
+        break;
+    case IS_DOUBLE:
+        php_printf("Double: %f
+", Z_DVAL_P(uservar));
+        break;
+    case IS_STRING:
+        php_printf("String: ");
+        PHPWRITE(Z_STRVAL_P(uservar), Z_STRLEN_P(uservar));
+        php_printf("
+");
+        break;
+    case IS_RESOURCE:
+        php_printf("Resource
+");
+        break;
+    case IS_ARRAY:
+        php_printf("Array
+");
+        break;
+    case IS_OBJECT:
+        php_printf("Object
+");
+        break;
+    default:
+        php_printf("Unknown
+");
+    }
+
+    RETURN_TRUE;
+}
+
+PHP_FUNCTION(hello_array)
+{
+    char *mystr;
+    zval *mysubarray;
+
+    array_init(return_value);
+
+    add_index_long(return_value, 42, 123);
+
+    add_next_index_string(return_value, "I should now be found at index 43", 1);
+
+    add_next_index_stringl(return_value, "I'm at 44!", 10, 1);
+
+    mystr = estrdup("Forty Five");
+    add_next_index_string(return_value, mystr, 0);
+
+    add_assoc_double(return_value, "pi", 3.1415926535);
+
+    ALLOC_INIT_ZVAL(mysubarray);
+    array_init(mysubarray);
+    add_next_index_string(mysubarray, "hello", 1);
+    php_printf("mysubarray->refcount = %d
+", mysubarray->refcount);
+    mysubarray->refcount = 2;
+    php_printf("mysubarray->refcount = %d
+", mysubarray->refcount);
+    add_assoc_zval(return_value, "subarray", mysubarray);
+
+    php_printf("mysubarray->refcount = %d
+", mysubarray->refcount);
+}
+
+PHP_FUNCTION(hello_array_strings)
+{
+    zval *arr, **data;
+    HashTable *arr_hash;
+    HashPosition pointer;
+    int array_count;
+
+    if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "a", &arr) == FAILURE) {
+        RETURN_NULL();
+    }
+
+    arr_hash = Z_ARRVAL_P(arr);
+    array_count = zend_hash_num_elements(arr_hash);
+
+    php_printf("The array passed contains %d elements
+", array_count);
+
+    for(zend_hash_internal_pointer_reset_ex(arr_hash, &pointer); zend_hash_get_current_data_ex(arr_hash, (void**) &data, &pointer) == SUCCESS; zend_hash_move_forward_ex(arr_hash, &pointer)) {
+
+        zval temp;
+        char *key;
+        int key_len;
+        long index;
+
+        if (zend_hash_get_current_key_ex(arr_hash, &key, &key_len, &index, 0, &pointer) == HASH_KEY_IS_STRING) {
+            PHPWRITE(key, key_len);
+        } else {
+            php_printf("%ld", index);
+        }
+
+        php_printf(" => ");
+
+        temp = **data;
+        zval_copy_ctor(&temp);
+        convert_to_string(&temp);
+        PHPWRITE(Z_STRVAL(temp), Z_STRLEN(temp));
+        php_printf("
+");
+        zval_dtor(&temp);
+    }
+
+    RETURN_TRUE;
+}
+
+static int php_hello_array_walk(zval **element TSRMLS_DC)
+{
+    zval temp;
+
+    temp = **element;
+    zval_copy_ctor(&temp);
+    convert_to_string(&temp);
+    PHPWRITE(Z_STRVAL(temp), Z_STRLEN(temp));
+    php_printf("
+");
+    zval_dtor(&temp);
+
+    return ZEND_HASH_APPLY_KEEP;
+}
+
+static int php_hello_array_walk_arg(zval **element, char *greeting TSRMLS_DC)
+{
+    php_printf("%s", greeting);
+    php_hello_array_walk(element TSRMLS_CC);
+
+    return ZEND_HASH_APPLY_KEEP;
+}
+
+static int php_hello_array_walk_args(zval **element, int num_args, var_list args, zend_hash_key *hash_key)
+{
+    char *prefix = va_arg(args, char*);
+    char *suffix = va_arg(args, char*);
+    TSRMLS_FETCH();
+
+    php_printf("%s", prefix);
+    php_hello_array_walk(element TSRMLS_CC);
+    php_printf("%s
+", suffix);
+
+    return ZEND_HASH_APPLY_KEEP;
+}
+
+PHP_FUNCTION(hello_array_walk)
+{
+    zval *zarray;
+    int print_newline = 1;
+
+    if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "a", &zarray) == FAILURE) {
+        RETURN_NULL();
+    }
+
+    zend_hash_apply(Z_ARRVAL_P(zarray), (apply_func_t)php_hello_array_walk TSRMLS_CC);
+    zend_hash_internal_pointer_reset(Z_ARRVAL_P(zarray));
+    zend_hash_apply_with_argument(Z_ARRVAL_P(zarray), (apply_func_arg_t)php_hello_array_walk_arg, "Hello " TSRMLS_CC);
+    zend_hash_apply_with_arguments(Z_ARRVAL_P(zarray), (apply_func_args_t)php_hello_array_walk_args, 2, "Hello ", "Welcome to my extension!");
+
+    RETURN_TRUE;
+}
+
+PHP_FUNCTION(hello_array_value)
+{
+    zval *zarray, *zoffset, **zvalue;
+    long index = 0;
+    char *key = NULL;
+    int key_len = 0;
+
+    if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "az", &zarray, &zoffset) == FAILURE) {
+    RETURN_NULL();
+    }
+
+    switch (Z_TYPE_P(zoffset)) {
+    case IS_NULL:
+        index = 0;
+        break;
+    case IS_DOUBLE:
+        index = (long)Z_DVAL_P(zoffset);
+        break;
+    case IS_BOOL:
+    case IS_LONG:
+    case IS_RESOURCE:
+        index = Z_LVAL_P(zoffset);
+        break;
+    case IS_STRING:
+        key = Z_STRVAL_P(zoffset);
+        key_len = Z_STRLEN_P(zoffset);
+        break;
+    case IS_ARRAY:
+        key = "Array";
+        key_len = sizeof("Array") - 1;
+        break;
+    case IS_OBJECT:
+        key = "Object";
+        key_len = sizeof("Object") - 1;
+        break;
+    default:
+        key = "Unknown";
+        key_len = sizeof("Unknown") - 1;
+    }
+
+    if (key && zend_hash_find(Z_ARRVAL_P(zarray), key, key_len + 1, (void**)&zvalue) == FAILURE) {
+        php_error_docref(NULL TSRMLS_CC, E_NOTICE, "Undefined index: %s", key);
+        RETURN_NULL();
+    } else if (!key && zend_hash_index_find(Z_ARRVAL_P(zarray), index, (void**)&zvalue) == FAILURE) {
+        php_error_docref(NULL TSRMLS_CC, E_NOTICE, "Undefined index: %ld", index);
+        RETURN_NULL();
+    }
+
+    *return_value = **zvalue;
+    zval_copy_ctor(return_value);
+}
+
+PHP_FUNCTION(hello_get_global_var)
+{
+    char *varname;
+    int varname_len;
+    zval **varvalue;
+
+    if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "s", &varname, &varname_len) == FAILURE) {
+        RETURN_NULL();
+    }
+
+    if (zend_hash_find(&EG(symbol_table), varname, varname_len + 1, (void**)&varvalue) == FAILURE) {
+        php_error_docref(NULL TSRMLS_CC, E_NOTICE, "Undefined variable: %s", varname);
+        RETURN_NULL();
+    }
+
+    *return_value = **varvalue;
+    zval_copy_ctor(return_value);
+}
+
+PHP_FUNCTION(hello_set_local_var)
+{
+    zval *newvar;
+    char *varname;
+    int varname_len;
+    zval *value;
+
+    if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "sz", &varname, &varname_len, &value) == FAILURE) {
+        RETURN_NULL();
+    }
+
+    ALLOC_INIT_ZVAL(newvar);
+    *newvar = *value;
+    zval_copy_ctor(newvar);
+
+    zend_hash_add(EG(active_symbol_table), varname, varname_len + 1, &newvar, sizeof(zval*), NULL);
+
+    RETURN_TRUE;
+}
+			</pre>
+		</div>
+	</section>
+	<section id="what_is_next">
+		<div class="left">
+			<h2>What’s Next?</h2>
+			<p>In this tutorial, Part Two of the Extension Writing series, you learned how to accept function parameters, you created and used arrays, and, most importantly, you took a look at the inner workings of the zval. In Part Three, you’ll take a look at the resource data type and start working with more complex data structures.</p>
+		</div>
+		<div class="right">
+			<h2>接下来做什么</h2>
+			<p>在这个教程中, 第二部分, 你学习了如何接受函数参数, 你创建和使用了数组, 最重要的是, 你了解了zval的工作原理. 在第三部分, 你会了解资源数据类型, 并开始使用很多复杂的数据结构.</p>
+		</div>
+	</section>
+
+</div>
+</body>
+</html>

@@ -1,0 +1,1934 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<title>PHP扩展第三部分: 资源 [Extension Writing Part III: Resources]</title>
+	<style type="text/css">
+		.left {float: left; width: 48%; display: none;}
+		.left, .right {margin: 2px;}
+
+		/*
+		.left { display: block;}
+		.right { float: right; width: 48%}
+		*/
+
+		section {clear: both; -ms-word-wrap: break-word; word-wrap: break-word; font-size: 14px; line-height:180%;}
+		pre {font-size: 12px; color: #999; line-height:120%;}
+	</style>
+</head>
+<body>
+<div class="wrapper">
+	<section>
+		<div class="left">
+			<h1>Extension Writing Part III: Resources</h1>
+		</div>
+		<div class="right">
+			<h1>PHP 扩展编写 第三部分: 资源</h1>
+		</div>
+	</section>
+	<section>
+		<div class="left">
+			<ol>
+				<li><a href="#introduction">Introduction</a></li>
+				<li><a href="#resources">Resources</a></li>
+				<li><a href="#initializing-resources">Initializing Resources</a></li>
+				<li><a href="#accepting-resources-as-function-parameters">Accepting Resources as Function Parameters</a></li>
+				<li><a href="#destroying-resources">Destroying Resources</a></li>
+				<li><a href="#destroying-a-resource-by-force">Destroying a Resource by Force</a></li>
+				<li><a href="#persistent-resources">Persistent Resources</a></li>
+				<li><a href="#finding-existing-persistent-resources">Finding Existing Persistent Resources</a></li>
+				<li><a href="#sanity-check">Sanity Check</a></li>
+				<li><a href="#sammary">Summary</a></li>
+			</ol>
+		</div>
+		<div class="right">
+			<ol>
+				<li><a href="#introduction">Introduction</a></li>
+				<li><a href="#resources">Resources</a></li>
+				<li><a href="#initializing-resources">Initializing Resources</a></li>
+				<li><a href="#accepting-resources-as-function-parameters">Accepting Resources as Function Parameters</a></li>
+				<li><a href="#destroying-resources">Destroying Resources</a></li>
+				<li><a href="#destroying-a-resource-by-force">Destroying a Resource by Force</a></li>
+				<li><a href="#persistent-resources">Persistent Resources</a></li>
+				<li><a href="#finding-existing-persistent-resources">Finding Existing Persistent Resources</a></li>
+				<li><a href="#sanity-check">Sanity Check</a></li>
+				<li><a href="#sammary">Summary</a></li>
+			</ol>
+		</div>
+	</section>
+	<section id="introduction">
+		<div class="left">
+			<h2>Introduction</h2>
+			<p>Up until now, you’ve worked with concepts that are familiar and map easily to userspace analogies. In this tutorial, you’ll dig into the inner workings of a more alien data type – completely opaque in userspace, but with behavior that should ultimately inspire a sense of déjà vu.</p>
+		</div>
+		<div class="right">
+			<h2>介绍</h2>
+			<p>直到现在为止, 你已经使用熟悉的概念, 和易于映射的用户空间. 在这个教程中, 你将深入研究更多你不熟悉的数据类型, 针对用户空间完全不透明, 但是最终的感觉应该是似曾相识.</p>
+		</div>
+	</section>
+	<section id="resource">
+		<div class="left">
+			<h2>Resources</h2>
+			<p>While a PHP zval can represent a wide range of internal data types, one data type that is impossible to represent fully within a script is the pointer. Representing a pointer as a value becomes even more difficult when the structure your pointer references is an opaque typedef. Since there’s no meaningful way to present these complex structures, there’s also no way to act upon them meaningfully using traditional operators. The solution to this problem is to simply refer to the pointer by an essentially arbitrary label called a resource.</p>
+			<p>In order for the resource’s label to have any kind of meaning to the Zend Engine, its underlying data type must first be registered with PHP. You’ll start out by defining a simple data structure in php_hello.h. You can place it pretty much anywhere but, for the sake of this exercise, put it after the #define statements, and before the PHP_MINIT_FUNCTION declaration. You’re also defining a constant, which will be used for the resource’s name as shown during a call to var_dump().</p>
+			<pre>
+typedef struct _php_hello_person {
+    char *name;
+    int name_len;
+    long age;
+} php_hello_person;
+#define PHP_HELLO_PERSON_RES_NAME "Person Data"
+			</pre>
+			<p>Now, open up hello.c and add a true global integer before your ZEND_DECLARE_MODULE_GLOBALS statement:</p>
+			<pre>
+int le_hello_person;
+			</pre>
+			<p>List entry identifiers (le_*) are one of the very few places where you’ll declare true, honest to goodness global variables within a PHP extension. These values are simply used with a lookup table to associate resource types with their textual names and their destructor methods, so there’s nothing about them that needs to be threadsafe. Your extension will generate a unique number for each resource type it exports during the MINIT phase. Add that to your extension now, by placing the following line at the top of PHP_MINIT_FUNCTION(hello):</p>
+			<pre>
+le_hello_person = zend_register_list_destructors_ex(NULL, NULL, PHP_HELLO_PERSON_RES_NAME, module_number);
+			</pre>
+		</div>
+		<div class="right">
+			<h2>资源</h2>
+			<p>PHP zval 可以代表一个广泛的内部数据类型, 某个数据类型, 在PHP脚本中不可能完全表示出来, 这个是指针. 表示一个指针作为值变得非常困难, 当指针指向一个不透明的结构体. 因为没有任何有意义的呈现方式来说明这些复杂的结构, 同样也无法使用传统的操作方式. 此问题的解决方案就是简单指向本质上任意的指针, 被称作资源.</p>
+			<p>为了这个资源标签对于Zend 引擎来说拥有更多的意义, 潜在的数据类型, 必须现在PHP中注册. 你将要在php_hello.h文件中, 开始通过定义简单的数据结构. 你可以把他放在几乎任何地方, 为了这次练习的缘故, 把他放到#define 后面, 以及在 PHP_MINIT_FUNCTION 前声明. 你也可以定义一个常量, 它可以用它作为资源名称, 在调用var_dump()时输出.</p>
+			<pre>
+typedef struct _php_hello_person {
+    char *name;
+    int name_len;
+    long age;
+} php_hello_person;
+#define PHP_HELLO_PERSON_RES_NAME "Person Data"
+			</pre>
+			<p>现在, 打开hello.c 并且添加全局整型变量, 在 ZEND_DECLARE_MODULE_GLOBALS 之前.</p>
+			<pre>
+int le_hello_person;
+			</pre>
+			<p>le_* 这个标识符, 是为数不多的用来声明全局变量, 在PHP扩展中. 只是使用这些值在查找表中关联文本名称和析构方法, 所以他们没必要非得线程安全. 你的扩展将为每个资源类型(在MINIT 中暴露出来的)生成一个唯一的数字. 现在就添加你的扩展, 通过下面这行, 放在PHP_MINIT_FUNCTION(hello)上面:</p>
+			<pre>
+le_hello_person = zend_register_list_destructors_ex(NULL, NULL, PHP_HELLO_PERSON_RES_NAME, module_number);
+			</pre>
+		</div>
+	</section>
+	<section id="initializing-resource">
+		<div class="left">
+			<h2>Initializing Resources</h2>
+			<p>Now that you’ve registered your resource, you need to do something with it. Add the following function to hello.c, along with its matching entry in the hello_functions structure, and as a prototype in php_hello.h:</p>
+			<pre>
+PHP_FUNCTION(hello_person_new)
+{
+    php_hello_person *person;
+    char *name;
+    int name_len;
+    long age;
+    if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "sl", &name, &name_len, &age) == FAILURE) {
+        RETURN_FALSE;
+    }
+
+    if (name_len < 1) {
+        php_error_docref(NULL TSRMLS_CC, E_WARNING, "No name given, person resource not created.");
+        RETURN_FALSE;
+    }
+
+    if (age < 0 || age > 255) {
+        php_error_docref(NULL TSRMLS_CC, E_WARNING, "Nonsense age (%d) given, person resource not created.", age);
+        RETURN_FALSE;
+    }
+
+    person = emalloc(sizeof(php_hello_person));
+    person->name = estrndup(name, name_len);
+    person->name_len = name_len;
+    person->age = age;
+
+    ZEND_REGISTER_RESOURCE(return_value, person, le_hello_person);
+}
+			</pre>
+			<p>Before allocating memory and duplicating data, this function performs a few sanity checks on the data passed into the resource: Was a name provided? Is this person’s age even remotely within the realm of a human lifespan? Of course, anti-senescence research could make the data type for age (and its sanity-checked limits) seem like the Y2K bug someday, but it’s probably safe to assume no-one will be older than 255 anytime soon.</p>
+			<p>Once the function has satisfied its entrance criteria, it’s all down to allocating some memory and putting the data where it belongs. Lastly, return_value is populated with a newly registered resource. This function doesn’t need to understand the internals of the data struct; it only needs to know what its pointer address is, and what resource type that data is associated with.</p>
+		</div>
+		<div class="right">
+			<h2>初始化资源</h2>
+			<p>现在你已经注册了你的资源, 你需要与它一起做些什么事儿. 添加下面的函数到 hello.c文件中, 在hello_functions 结构中添加相应的条目, 并在php_hello.h中声明原型: </p>
+			<pre>
+PHP_FUNCTION(hello_person_new)
+{
+    php_hello_person *person;
+    char *name;
+    int name_len;
+    long age;
+    if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "sl", &name, &name_len, &age) == FAILURE) {
+        RETURN_FALSE;
+    }
+
+    if (name_len < 1) {
+        php_error_docref(NULL TSRMLS_CC, E_WARNING, "No name given, person resource not created.");
+        RETURN_FALSE;
+    }
+
+    if (age < 0 || age > 255) {
+        php_error_docref(NULL TSRMLS_CC, E_WARNING, "Nonsense age (%d) given, person resource not created.", age);
+        RETURN_FALSE;
+    }
+
+    person = emalloc(sizeof(php_hello_person));
+    person->name = estrndup(name, name_len);
+    person->name_len = name_len;
+    person->age = age;
+
+    ZEND_REGISTER_RESOURCE(return_value, person, le_hello_person);
+}
+			</pre>
+			<p>再分配内存和复制数据之前, 函数对传入到资源的数据做安全检查: 是否是提供了名字? 这是人的年龄甚至更广范围内人类寿命? 当然了, 抗衰老研究可以让年龄像千年虫问题一样溢出, 总会有这一天的, 但是255岁可能是较为安全的假设, 因为没有入很快要超过255岁。</p>
+			<p>一旦函数对自己的允入准则满意, 就开始分配内存并把自己的数据放进去. 最后, return_value 使用新注册的资源填充. 这个函数不需要理解数据的内部结构, 它只需要知道指针地址, 数据相关的类型.</p>
+		</div>
+	</section>
+	<section id="accepting-resources-as-function-parameters">
+		<div class="left">
+			<h2>Accepting Resources as Function Parameters</h2>
+			<p>From the previous tutorial in this series, you already know how to use zend_parse_parameters() to accept a resource parameter. Now it’s time to apply that to recovering the data that goes with a given resource. Add this next function to your extension:</p>
+			<pre>
+PHP_FUNCTION(hello_person_greet)
+{
+    php_hello_person *person;
+    zval *zperson;
+    if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "r", &zperson) == FAILURE) {
+        RETURN_FALSE;
+    }
+
+    ZEND_FETCH_RESOURCE(person, php_hello_person*, &zperson, -1, PHP_HELLO_PERSON_RES_NAME, le_hello_person);
+
+    php_printf("Hello ");
+    PHPWRITE(person->name, person->name_len);
+    php_printf("!
+According to my records, you are %d years old.
+", person->age);
+
+    RETURN_TRUE;
+}
+			</pre>
+			<p>The important parts of the functionality here should be easy enough to parse. ZEND_FETCH_RESOURCE() wants a variable to drop the pointer value into. It also wants to know what the variable’s internal type should look like, and it needs to know where to get the resource identifier from.</p>
+			<p>The -1 in this function call is an alternative to using &zperson to identify the resource. If any numeric value is provided here other than -1, the Zend Engine will attempt to use that number to identify the resource rather than the zval* parameter’s data. If the resource passed does not match the resource type specified by the last parameter, an error will be generated using the resource name given in the second to last parameter.</p>
+			<p>There is more than one way to skin a resource though. In fact the following four code blocks are all effectively identical:</p>
+			<pre>
+ZEND_FETCH_RESOURCE(person, php_hello_person *, &zperson, -1, PHP_HELLO_PERSON_RES_NAME, le_person_name);
+ZEND_FETCH_RESOURCE(person, php_hello_person *, NULL, Z_LVAL_P(zperson), PHP_HELLO_PERSON_RES_NAME, le_person_name);
+
+person = (php_hello_person *) zend_fetch_resource(&zperson TSRMLS_CC, -1, PHP_HELLO_PERSON_RES_NAME, NULL, 1, le_person_name);
+ZEND_VERIFY_RESOURCE(person);
+
+person = (php_hello_person *) zend_fetch_resource(&zperson TSRMLS_CC, -1, PHP_HELLO_PERSON_RES_NAME, NULL, 1, le_person_name);
+if (!person) {
+    RETURN_FALSE;
+}
+			</pre>
+			<p>The last couple of forms are useful in situations where you’re not in a PHP_FUNCTION(), and therefore have no return_value to assign; or when it’s perfectly reasonable for the resource type to not match, and simply returning FALSE is not what you want.</p>
+			<p>However you choose to retrieve your resource data from the parameter, the result is the same. You now have a familiar C struct that can be accessed in exactly the same way as you would any other C program. At this point the struct still ‘belongs’ to the resource variable, so your function shouldn’t free the pointer or change reference counts prior to exiting. So how are resources destroyed?</p>
+		</div>
+		<div class="right">
+			<h2>使用资源作为函数参数</h2>
+			<p>通过之前的教程, 你已经知道如何使用zend_parse_parameters() 接收一个资源参数了. 现在, 是时候使用给定的资源了. 添加下面的函数到你的扩展中:</p>
+			<pre>
+PHP_FUNCTION(hello_person_greet)
+{
+    php_hello_person *person;
+    zval *zperson;
+    if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "r", &zperson) == FAILURE) {
+        RETURN_FALSE;
+    }
+
+    ZEND_FETCH_RESOURCE(person, php_hello_person*, &zperson, -1, PHP_HELLO_PERSON_RES_NAME, le_hello_person);
+
+    php_printf("Hello ");
+    PHPWRITE(person->name, person->name_len);
+    php_printf("!
+According to my records, you are %d years old.
+", person->age);
+
+    RETURN_TRUE;
+}
+			</pre>
+			<p>这个功能比较重要的部分解析起来, 还是足够简单的. ZEND_FETCH_RESOURCE() 需要一个变量来存储指针值. 它还需要知道变量的内部结构, 以及从什么地方可以获得资源标识符号.</p>
+			<p>参数 -1: 表示使用 &zperson 来识别资源. 如果传递的不是 -1, Zend 引擎会试图使用这个数字来识别资源, 而不是使用 zval* 变量的值. 如果传入的资源类型和最后参数给出资源类型不一致, 会根据资源名称(倒数第二个参数)生成一个错误.</p>
+			<p>资源有多种表示方式. 实际上下面四个代码块的效果完全一致:</p>
+			<pre>
+ZEND_FETCH_RESOURCE(person, php_hello_person *, &zperson, -1, PHP_HELLO_PERSON_RES_NAME, le_person_name);
+
+ZEND_FETCH_RESOURCE(person, php_hello_person *, NULL, Z_LVAL_P(zperson), PHP_HELLO_PERSON_RES_NAME, le_person_name);
+
+person = (php_hello_person *) zend_fetch_resource(&zperson TSRMLS_CC, -1, PHP_HELLO_PERSON_RES_NAME, NULL, 1, le_person_name);
+ZEND_VERIFY_RESOURCE(person);
+
+person = (php_hello_person *) zend_fetch_resource(&zperson TSRMLS_CC, -1, PHP_HELLO_PERSON_RES_NAME, NULL, 1, le_person_name);
+if (!person) {
+    RETURN_FALSE;
+}
+			</pre>
+			<p>最后两种形式, 你的代码如果不在PHP_FUNCTION()函数中时, 就特别有用了,  也因此不需要分配 return_value; 就资源类型不匹配来而言, 简单返回FALSE也不是你想要的.</p>
+			<p>当然选择从参数接收资源数据, 结果一样的. 你现在已经熟悉C结构, 同样可以在其他C程序中正确的访问. 这一点上, 这个结构体仍旧属于资源变量 , 所以你的函数不能应该释放指针或者改变引用计数, 在退出程序之前. 但是, 怎么销毁资源呢? </p>
+		</div>
+	</section>
+	<section id="destroying-resources">
+		<div class="left">
+			<h2>Destroying Resources</h2>
+			<p>Most PHP functions that create resource parameters have matching functions to free those resources. For example, mysql_connect() has mysql_close(), mysql_query() has mysql_free_result(), fopen() has fclose(), and so on and so forth. Experience has probably taught you that if you simply unset() variables containing resource values, then whatever real resource they’re attached to will also be freed/closed. For example: </p>
+			<pre>
+&lt;?php
+    $fp = fopen('foo.txt','w');
+    unset($fp);
+
+?&gt;
+			</pre>
+			<p>The first line of this snippet opens a file for writing, foo.txt, and assigns the stream resource to the variable $fp. When the second line unsets $fp, PHP automatically closes the file – even though fclose() was never called. How does it do that?</p>
+			<p>The secret lies in the zend_register_resource() call you made in your MINIT function. The two NULL parameters you passed correspond to cleanup (or dtor) functions. The first is called for ordinary resources, and the second for persistent ones. We’ll focus on ordinary resources for now and come back to persistent resources later on, but the general semantics are the same. Modify your zend_register_resource line as follows:</p>
+			<pre>
+le_hello_person = zend_register_list_destructors_ex(php_hello_person_dtor, NULL, PHP_HELLO_PERSON_RES_NAME, module_number);
+			</pre>
+			<p>and create a new function located just above the MINIT method:</p>
+			<pre>
+static void php_hello_person_dtor(zend_rsrc_list_entry *rsrc TSRMLS_DC)
+{
+    php_hello_person *person = (php_hello_person*)rsrc->ptr;
+    if (person) {
+        if (person->name) {
+            efree(person->name);
+        }
+        efree(person);
+    }
+}
+			</pre>
+			<p>As you can see, this simply frees any allocated buffers associated with the resource. When the last userspace variable containing a reference to your resource goes out of scope, this function will be automatically called so that your extension can free memory, disconnect from remote hosts, or perform other last minute cleanup.</p>
+		</div>
+		<div class="right">
+			<h2>销毁资源</h2>
+			<p>大多PHP资源函数都有与之相匹配的释放资源函数. 比如: mysql_connect() 有 mysql_close(), mysql_query() 有 mysql_free_result(), fopen() 有 fclose(), 等等. 开发经验会告诉你, 如果你简单使用unset() 包含有资源数据的变量, 然后无论什么相关的资源都会被释放或者关闭. 比如: </p>
+			<pre>
+&lt;?php
+    $fp = fopen('foo.txt','w');
+    unset($fp);
+
+?&gt;
+			</pre>
+			<p>第一行以可写方式打开一个文件, foo.txt, 然后分配流资源给变量$fp. 当在第二行 unset($fp)时, PHP 自动关闭文件, 尽管fclose()没有被调用. 这是怎么做到的?</p>
+			<p>秘密就在于 zend_register_resource() 在MINIT函数中调用. 两个NULL 参数对应清理功能(or dtor). 第一个NULL 指普通资源, 第二个是持续资源. 我们现在关注普通资源, 后续会谈一下持久资源, 但是一般语义是相同的. 修改你的zend_register_resource 行如下:</p>
+			<pre>
+le_hello_person = zend_register_list_destructors_ex(php_hello_person_dtor, NULL, PHP_HELLO_PERSON_RES_NAME, module_number);
+			</pre>
+			<p>然后创建一个新函数, 在的MINIT方法上面:</p>
+			<pre>
+static void php_hello_person_dtor(zend_rsrc_list_entry *rsrc TSRMLS_DC)
+{
+    php_hello_person *person = (php_hello_person*)rsrc->ptr;
+    if (person) {
+        if (person->name) {
+            efree(person->name);
+        }
+        efree(person);
+    }
+}
+			</pre>
+			<p>就像你看到的那样, 它简单释放了任何与资源相关的缓存内存. 当最后一个用户变量包含资源指向超出作用域, 这个函数会被自动调用, 保证你的扩展释放内存, 断开远程连接, 或者执行其他最后的清理.</p>
+		</div>
+	</section>
+	<section id="destroying-a-resource-by-force">
+		<div class="left">
+			<h2>Destroying a Resource by Force</h2>
+			<p>If calling a resource’s dtor function depends on all the variables pointing to it going out of scope, then how do functions like fclose() or mysql_free_result() manage to perform their job while references to the resource still exist? Before I answer that question, I’d like you to try out the following:</p>
+			<pre>
+&lt;?php
+$fp = fopen('test', 'w');
+var_dump($fp);
+fclose($fp);
+var_dump($fp);
+?&gt;
+			</pre>
+			<p>In both calls to var_dump(), you can see the numeric value of the resource number, so you know that a reference to your resource still exists; yet the second call to var_dump() claims the type is ‘unknown’. This is because the resource lookup table which the Zend Engine keeps in memory, no longer contains the file handle to match that number – so any attempt to perform a ZEND_FETCH_RESOURCE() using that number will fail.</p>
+			<p>fclose(), like so many other resource-based functions, accomplishes this by using zend_list_delete(). Perhaps obviously, perhaps not, this function deletes an item from a list, specifically a resource list. The simplest use of this would be:</p>
+			<pre>
+PHP_FUNCTION(hello_person_delete)
+{
+    zval *zperson;
+    if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "r", &zperson) == FAILURE) {
+        RETURN_FALSE;
+    }
+
+    zend_list_delete(Z_LVAL_P(zperson));
+    RETURN_TRUE;
+}
+			</pre>
+			<p>Of course, this function will destroy *any* resource type regardless of whether it’s our person resource, a file handle, a MySQL connection, or whatever. In order to avoid causing potential trouble for other extensions and making userspace code harder to debug, it is considered good practice to first verify the resource type. This can be done easily by fetching the resource into a dummy variable using ZEND_FETCH_RESOURCE(). Go ahead and add that to your function, between the zend_parse_parameters() call and zend_list_delete().</p>
+		</div>
+		<div class="right">
+			<h2>强制销毁一个资源</h2>
+			<p>如果调用一个资源的析构函数(dtor)取决于所有指向它的变量都退出作用域, 但是, 像函数fclose() 和 mysql_free_result() 如何释放还有引用指向的资源? 在我回答这个问题前, 我希望你能试试下面的代码</p>
+			<pre>
+&lt;?php
+$fp = fopen('test', 'w');
+var_dump($fp);
+fclose($fp);
+var_dump($fp);
+?&gt;
+			</pre>
+			<p>var_dump()两次调用中, 你能看的资源的数字值, 因此, 你知道资源指向仍然存在; 但是第二个var_dump() 请求的类型是 'unknow'. 这是因为资源检查表被Zend引擎一直保持在内存中, 不再包含文件的句柄来匹配这个数字, 因此, 任何试图使用该数字执行ZEND_FETCH_RESOURCE() 都会失败.</p>
+			<p>fclose(), 类似众多其他基于资源的函数, 使用zend_list_delete() 完成. 也许很明显, 也许不明显, 这个函数从列表中删除一项, 具体来说就是一个资源列表. 简单使用: </p>
+			<pre>
+PHP_FUNCTION(hello_person_delete)
+{
+    zval *zperson;
+    if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "r", &zperson) == FAILURE) {
+        RETURN_FALSE;
+    }
+
+    zend_list_delete(Z_LVAL_P(zperson));
+    RETURN_TRUE;
+}
+			</pre>
+			<p>当然, 这个函数将会销毁任何类型的资源,  不管是个人资源, 文件句柄, 数据库连接, 说中其他任何资源. 为了避免引起潜在的扩展影响到其他扩展, 以及避免用户代码难以debug, 一个比较好的实践是先验证资源类型. 很容易使用 ZEND_FETCH_RESOURCE() 获取资源到一个虚假变量. 只管添加到你的函数中, 位于 zend_parse_parameters() 和 zend_list_delete()中间.</p>
+		</div>
+	</section>
+	<section id="persistent-resources">
+		<div class="left">
+			<h2>Persistent Resources</h2>
+			<p>If you’ve used mysql_pconnect(), popen() or any of the other persistent resource types, then you’ll know that it’s possible for a resource to stick around, not just after all the variables referencing it have gone out of scope, but even after a request completes and a new one begins. These resources are called persistent resources, because they persist throughout the life of the SAPI unless deliberately destroyed.</p>
+			<p>The two key differences between standard resources and persistent ones are the placement of the dtor function when registering, and the use of pemalloc()rather than emalloc() for data allocation. </p>
+			<p>Let’s build a version of our the person resource that can remain persistent. Start by adding another zend_register_resource() line to MINIT. Don’t forget to define the le_hello_person_persist variable next to le_hello_person: </p>
+			<pre>
+PHP_MINIT_FUNCTION(hello)
+{
+    le_hello_person = zend_register_list_destructor_ex(php_hello_person_dtor, NULL, PHP_HELLO_PERSON_RES_NAME, module_number);
+    le_hello_person_persist = zend_register_list_destructor_ex (NULL, php_hello_person_persist_dtor, PHP_HELLO_PERSON_RES_NAME, module_number);
+    ...
+			</pre>
+			<p>The basic syntax is the same, but this time you’ve specified the destructor function in the second parameter to zend_register_resource() as opposed to the first. All that really distinguishes one of these from the other is when the dtor function is actually called. A dtor function passed in the first parameter is called with the active request shutdown, while a dtor function passed in the second parameter isn’t called until the module is unloaded during final shutdown.</p>
+			<p>Since you’ve referenced a new resource dtor function, you’ll need to define it. Adding this familiar looking method to hello.c somewhere above the MINIT function should do the trick:</p>
+			<pre>
+static void php_hello_person_persist_dtor(zend_rsrc_list_entry *rsrc TSRMLS_DC)
+{
+    php_hello_person *person = (php_hello_person*)rsrc->ptr;
+    if (person) {
+        if (person->name) {
+            pefree(person->name, 1);
+    }
+        pefree(person, 1);
+    }
+}
+			</pre>
+			<p>Now you need a way to instantiate a persistent version of the person resource. The established convention is to create a new function with a ‘p’ prefix in the name. Add this function to your extension:</p>
+			<pre>
+PHP_FUNCTION(hello_person_pnew)
+{
+    php_hello_person *person;
+    char *name;
+    int name_len;
+    long age;
+    if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "sl", &name, &name_len, &age) == FAILURE) {
+        RETURN_FALSE;
+    }
+
+    if (name_len < 1) {
+        php_error_docref(NULL TSRMLS_CC, E_WARNING, "No name given, person resource not created.");
+        RETURN_FALSE;
+    }
+
+    if (age < 0 || age > 255) {
+        php_error_docref(NULL TSRMLS_CC, E_WARNING, "Nonsense age (%d) given, person resource not created.", age);
+        RETURN_FALSE;
+    }
+
+    person = pemalloc(sizeof(php_hello_person), 1);
+    person->name = pemalloc(name_len + 1, 1);
+    memcpy(person->name, name, name_len + 1);
+    person->name_len = name_len;
+    person->age = age;
+
+    ZEND_REGISTER_RESOURCE(return_value, person, le_hello_person_persist);
+}
+			</pre>
+			<p>As you can see, this function differs only slightly from hello_person_new(). In practice, you’ll typically see these kinds of paired userspace functions implemented as wrapper functions around a common core. Take a look through the source at other paired resource creation functions to see how this kind of duplication is avoided.</p>
+			<p>Now that your extension is creating both types of resources, it needs to be able to handle both types. Fortunately, ZEND_FETCH_RESOURCE has a sister function that is up to the task. Replace your current call to ZEND_FETCH_RESOURCE in hello_person_greet() with the following:</p>
+			<pre>
+ZEND_FETCH_RESOURCE2(person, php_hello_person*, &zperson, -1, PHP_HELLO_PERSON_RES_NAME , le_hello_person, le_hello_person_persist);
+			</pre>
+			<p>This will load your person variable with appropriate data, regardless of whether or not a persistent resource was passed.</p>
+			<p>The functions these two FETCH macros call will actually allow you to specify any number of resource types, but it’s rare to need more than two. Just in case, here’s the last statement rewritten using the base function:</p>
+			<pre>
+person = (php_hello_person*) zend_fetch_resource(&zperson TSRMLS_CC, -1, PHP_HELLO_PERSON_RES_NAME, NULL, 2, le_hello_person, le_hello_person_persist);
+ZEND_VERIFY_RESOURCE(person);
+			</pre>
+			<p>There are two important things to notice here. Firstly, you can see that the FETCH_RESOURCE macros automatically attempt to verify the resource. Expanded out, the ZEND_VERIFY_RESOURCE macro in this case simply translates to:</p>
+			<pre>
+if (!person) {
+    RETURN_FALSE;
+}
+			</pre>
+			<p>Of course, you don’t always want your extension function to exit just because a resource couldn’t be fetched, so you can use the real zend_fetch_resource() function to try to fetch the resource type, but then use your own logic to deal with NULL values being returned.</p>
+		</div>
+		<div class="right">
+			<h2>持久资源</h2>
+			<p>如果你已经使用了 mysql_pconnect(), popen() 或者其他持久资源类型, 你会发现保留资源是有可能的, 不仅是在所有变量退出作用域之后, 但即使是请求完成之后和新请求开始之前也是如此. 这些资源被称作是持久资源, 因为他们会一直保持在SAPI生命周期中, 除非故意销毁</p>
+			<p>标准资源和持久资源有两个关键的不同点: dtor(析构)函数注册的位置, 和使用pemalloc() 而不是使用 emalloc() 进行内存分配.</p>
+			<p>让我们构建一个版本: 让我们的person资源保持持久. 通过添加另外一个 zend_register_resource() 到MINIT中. 不要忘记定义le_hello_person_persist 变量, 在 le_hello_person 之后.</p>
+			<pre>
+PHP_MINIT_FUNCTION(hello)
+{
+    le_hello_person = zend_register_list_destructor_ex(php_hello_person_dtor, NULL, PHP_HELLO_PERSON_RES_NAME, module_number);
+    le_hello_person_persist = zend_register_list_destructor_ex (NULL, php_hello_person_persist_dtor, PHP_HELLO_PERSON_RES_NAME, module_number);
+    ...
+			</pre>
+			<p>基本的语法是一样的, 但是这时你已经在zend_register_resource()的第二个参数指定了析构函数, 这与第一个参数截然相反. 所有真正区别, 其中的一个就是dtor 函数什么时候真正调用. 第一个参数传递过来的dtor函数, 在主动关闭前被调用, 第二个参数传递过来的dtor函数, 直到整个进程结束(模块被卸载时)才会被调用.</p>
+			<p>既然你引用一个新的资源dtor函数, 那么你需要定义它. 添加这个方法到hello.c文件的某个地方, 在MINIT 函数之前就好: </p>
+			<pre>
+static void php_hello_person_persist_dtor(zend_rsrc_list_entry *rsrc TSRMLS_DC)
+{
+    php_hello_person *person = (php_hello_person*)rsrc->ptr;
+    if (person) {
+        if (person->name) {
+            pefree(person->name, 1);
+    }
+        pefree(person, 1);
+    }
+}
+			</pre>
+			<p>现在你需要一种方式, 来实例化一个持久的 person 资源. 一个已存在的约定就是: 创建新的函数, 名字需要以'p'开始. 添加这个函数到你的扩展中: </p>
+			<pre>
+PHP_FUNCTION(hello_person_pnew)
+{
+    php_hello_person *person;
+    char *name;
+    int name_len;
+    long age;
+    if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "sl", &name, &name_len, &age) == FAILURE) {
+        RETURN_FALSE;
+    }
+
+    if (name_len < 1) {
+        php_error_docref(NULL TSRMLS_CC, E_WARNING, "No name given, person resource not created.");
+        RETURN_FALSE;
+    }
+
+    if (age < 0 || age > 255) {
+        php_error_docref(NULL TSRMLS_CC, E_WARNING, "Nonsense age (%d) given, person resource not created.", age);
+        RETURN_FALSE;
+    }
+
+    person = pemalloc(sizeof(php_hello_person), 1);
+    person->name = pemalloc(name_len + 1, 1);
+    memcpy(person->name, name, name_len + 1);
+    person->name_len = name_len;
+    person->age = age;
+
+    ZEND_REGISTER_RESOURCE(return_value, person, le_hello_person_persist);
+}
+			</pre>
+			<p>如你所见, 这个函数与hello_person_new() 略有不同. 在实践中, 你通常会看到这些成对用户空间函数实现为核心函数的封装. 看一下通过其他对应的资源创建函数, 观察如何避免这种重复.</p>
+			<p>现在, 你的扩展创建了两种类型的资源, 这需要能够处理两种类型. 幸运的是, ZEND_FETCH_RESOURCE 有一个姊妹函数来做这个事. 在函数hello_person_greet()中, 使用如下代码替换ZEND_FETCH_RESOURCE: </p>
+			<pre>
+ZEND_FETCH_RESOURCE2(person, php_hello_person*, &zperson, -1, PHP_HELLO_PERSON_RES_NAME , le_hello_person, le_hello_person_persist);
+			</pre>
+			<p>它会使用合适的数据加载你的person资源, 不管传递的是否是持久资源.</p>
+			<p>这两个FETCH宏的调用, 实际上允许你指定任何类型的资源值, 但是同时需要两个比较罕见. 以防万一, 最后一条语句采用基本函数重写:</p>
+			<pre>
+person = (php_hello_person*) zend_fetch_resource(&zperson TSRMLS_CC, -1, PHP_HELLO_PERSON_RES_NAME, NULL, 2, le_hello_person, le_hello_person_persist);
+ZEND_VERIFY_RESOURCE(person);
+			</pre>
+			<p>这儿有两个重要的事情需要注意. 首先, FETCH_RESOURCE 宏试图自动修改资源. 延伸一下, ZEND_VERIFY_RESOURCE宏简单翻译为: </p>
+			<pre>
+if (!person) {
+    RETURN_FALSE;
+}
+			</pre>
+			<p>当然了, 你不会想要你的扩展会因为资源获取失败而退出, 因此, 你可以使用真正的zend_fetch_resource()函数尝试获取资源类型, 然后可以使用自己的逻辑来处理返回的 NULL值.</p>
+		</div>
+	</section>
+	<section id="finding-existing-persistent-resources">
+		<div class="left">
+			<h2>Finding Existing Persistent Resources</h2>
+			<p>A persistent resource is only as good as your ability to reuse it. In order to reuse it, you’ll need somewhere safe to store it. The Zend Engine provides for this through the EG(persistent_list) executor global, a HashTable containing list_entry structures which is normally used internally by the Eengine. Modify hello_person_pnew() according to the following:</p>
+			<pre>
+PHP_FUNCTION(hello_person_pnew)
+{
+    php_hello_person *person;
+    char *name, *key;
+    int name_len, key_len;
+    long age;
+    list_entry *le, new_le;
+    if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "sl", &name, &name_len, &age) == FAILURE) {
+        RETURN_FALSE;
+    }
+
+    if (name_len < 1) {
+        php_error_docref(NULL TSRMLS_CC, E_WARNING, "No name given, person resource not created.");
+        RETURN_FALSE;
+    }
+
+    if (age < 0 || age > 255) {
+        php_error_docref(NULL TSRMLS_CC, E_WARNING, "Nonsense age (%d) given, person resource not created.", age);
+        RETURN_FALSE;
+    }
+
+    /* Look for an established resource */
+    key_len = spprintf(&key, 0, "hello_person_%s_%d
+", name, age);
+    if (zend_hash_find(&EG(persistent_list), key, key_len + 1, &le) == SUCCESS) {
+        /* An entry for this person already exists */
+        ZEND_REGISTER_RESOURCE(return_value, le->ptr, le_hello_person_persist);
+        efree(key);
+        return;
+    }
+
+    /* New person, allocate a structure */
+    person = pemalloc(sizeof(php_hello_person), 1);
+    person->name = pemalloc(name_len + 1, 1);
+    memcpy(person->name, name, name_len + 1);
+    person->name_len = name_len;
+    person->age = age;
+
+    ZEND_REGISTER_RESOURCE(return_value, person, le_hello_person_persist);
+
+    /* Store a reference in the persistence list */
+    new_le.ptr = person;
+    new_le.type = le_hello_person_persist;
+    zend_hash_add(&EG(persistent_list), key, key_len + 1, &new_le, sizeof(list_entry), NULL);
+
+    efree(key);
+}
+			</pre>
+			<p>This version of hello_person_pnew() first checks for an existing php_hello_person structure in the EG(persistent_list) global and, if available, uses that rather than waste time and resources on reallocating it. If it does not exist yet, the function allocates a new structure populated with fresh data and adds that structure to the persistent list instead. Either way, the function leaves you with a new structure registered as a resource within the request.</p>
+			<p>The persistent list used to store pointers is always local to the current process or thread, so there’s never any concern that two requests might be looking at the same data at the same time. If one process deliberately closes a persistent resource PHP will handle it, removing the reference to that resource from the persistent list so that future invocations don’t try to use the freed data.</p>
+		</div>
+		<div class="right">
+			<h2>查找存在的持久资源</h2>
+			<p>一个持久资源进你的能力来重复调用. 为了重复使用它, 你需要在安全的地方存放它. Zend 引擎通过全局EG(persistent_list)提供, 一个HashTable 包含list_entry结构, 通常被引擎内部使用. 参考下面代码修改hello_person_pnew(): </p>
+			<pre>
+PHP_FUNCTION(hello_person_pnew)
+{
+    php_hello_person *person;
+    char *name, *key;
+    int name_len, key_len;
+    long age;
+    list_entry *le, new_le;
+    if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "sl", &name, &name_len, &age) == FAILURE) {
+        RETURN_FALSE;
+    }
+
+    if (name_len < 1) {
+        php_error_docref(NULL TSRMLS_CC, E_WARNING, "No name given, person resource not created.");
+        RETURN_FALSE;
+    }
+
+    if (age < 0 || age > 255) {
+        php_error_docref(NULL TSRMLS_CC, E_WARNING, "Nonsense age (%d) given, person resource not created.", age);
+        RETURN_FALSE;
+    }
+
+    /* Look for an established resource */
+    key_len = spprintf(&key, 0, "hello_person_%s_%d
+", name, age);
+    if (zend_hash_find(&EG(persistent_list), key, key_len + 1, &le) == SUCCESS) {
+        /* An entry for this person already exists */
+        ZEND_REGISTER_RESOURCE(return_value, le->ptr, le_hello_person_persist);
+        efree(key);
+        return;
+    }
+
+    /* New person, allocate a structure */
+    person = pemalloc(sizeof(php_hello_person), 1);
+    person->name = pemalloc(name_len + 1, 1);
+    memcpy(person->name, name, name_len + 1);
+    person->name_len = name_len;
+    person->age = age;
+
+    ZEND_REGISTER_RESOURCE(return_value, person, le_hello_person_persist);
+
+    /* Store a reference in the persistence list */
+    new_le.ptr = person;
+    new_le.type = le_hello_person_persist;
+    zend_hash_add(&EG(persistent_list), key, key_len + 1, &new_le, sizeof(list_entry), NULL);
+
+    efree(key);
+}
+			</pre>
+			<p>该版本hello_person_pnew() 首先在全局EG(persistent_list) 中简介是否存在php_hello_person结构, 如果存在, 使用它而不是浪费时间和重新分配资源. 如果不存在, 函数将分配一个新的结构体, 并使用新的数据填充, 并且添加到持久资源列表. 无论哪种形式, 这个函数在请求中注册为一个新的资源结构.</p>
+			<p>持久化列表用来存储指针, 总是本地化当前进程或者线程, 因此没必要关注同一时间两个请求, 可能看起来数据一样. 如果一个进程故意关闭一个持久的资源, PHP 会处理这种情况, 移除列表中资源引用, 因此之后的调用不会尝试用释放的数据.</p>
+		</div>
+	</section>
+	<section id="sanity-check">
+		<div class="left">
+			<h2>Sanity Check</h2>
+			<p>Once again, your extension files as they should be by the end of this tutorial:</p>
+			<h3>config.m4</h3>
+			<pre>
+PHP_ARG_ENABLE(hello, [whether to enable Hello World support],
+[ --enable-hello Enable Hello World support])
+if test "$PHP_HELLO" = "yes"; then
+  AC_DEFINE(HAVE_HELLO, 1, [Whether you have Hello World])
+  PHP_NEW_EXTENSION(hello, hello.c, $ext_shared)
+fi				
+			</pre>
+			<h3>php_hello.h</h3>
+			<pre>
+#ifndef PHP_HELLO_H
+#define PHP_HELLO_H 1
+#ifdef ZTS
+#include "TSRM.h"
+#endif
+
+ZEND_BEGIN_MODULE_GLOBALS(hello)
+    long counter;
+    zend_bool direction;
+ZEND_END_MODULE_GLOBALS(hello)
+
+#ifdef ZTS
+#define HELLO_G(v) TSRMG(hello_globals_id, zend_hello_globals *, v)
+#else
+#define HELLO_G(v) (hello_globals.v)
+#endif
+
+#define PHP_HELLO_WORLD_VERSION "1.0"
+#define PHP_HELLO_WORLD_EXTNAME "hello"
+
+typedef struct _php_hello_person {
+    char *name;
+    int name_len;
+    long age;
+} php_hello_person;
+
+#define PHP_HELLO_PERSON_RES_NAME "Person Data"
+
+PHP_MINIT_FUNCTION(hello);
+PHP_MSHUTDOWN_FUNCTION(hello);
+PHP_RINIT_FUNCTION(hello);
+
+PHP_FUNCTION(hello_world);
+PHP_FUNCTION(hello_long);
+PHP_FUNCTION(hello_double);
+PHP_FUNCTION(hello_bool);
+PHP_FUNCTION(hello_null);
+PHP_FUNCTION(hello_greetme);
+PHP_FUNCTION(hello_add);
+PHP_FUNCTION(hello_dump);
+PHP_FUNCTION(hello_array);
+PHP_FUNCTION(hello_array_strings);
+PHP_FUNCTION(hello_array_walk);
+PHP_FUNCTION(hello_array_value);
+PHP_FUNCTION(hello_get_global_var);
+PHP_FUNCTION(hello_set_local_var);
+PHP_FUNCTION(hello_person_new);
+PHP_FUNCTION(hello_person_pnew);
+PHP_FUNCTION(hello_person_greet);
+PHP_FUNCTION(hello_person_delete);
+
+extern zend_module_entry hello_module_entry;
+#define phpext_hello_ptr &hello_module_entry
+
+#endif
+			</pre>
+			<h3>hello.c</h3>
+			<pre>
+#ifdef HAVE_CONFIG_H
+#include "config.h"
+#endif
+#include "php.h"
+#include "php_ini.h"
+#include "php_hello.h"
+
+int le_hello_person;
+int le_hello_person_persist;
+
+ZEND_DECLARE_MODULE_GLOBALS(hello)
+
+static function_entry hello_functions[] = {
+    PHP_FE(hello_world, NULL)
+    PHP_FE(hello_long, NULL)
+    PHP_FE(hello_double, NULL)
+    PHP_FE(hello_bool, NULL)
+    PHP_FE(hello_null, NULL)
+    PHP_FE(hello_greetme, NULL)
+    PHP_FE(hello_add, NULL)
+    PHP_FE(hello_dump, NULL)
+    PHP_FE(hello_array, NULL)
+    PHP_FE(hello_array_strings, NULL)
+    PHP_FE(hello_array_walk, NULL)
+    PHP_FE(hello_array_value, NULL)
+    PHP_FE(hello_get_global_var, NULL)
+    PHP_FE(hello_set_local_var, NULL)
+    PHP_FE(hello_person_new, NULL)
+    PHP_FE(hello_person_pnew, NULL)
+    PHP_FE(hello_person_greet, NULL)
+    PHP_FE(hello_person_delete, NULL)
+    {NULL, NULL, NULL}
+};
+
+zend_module_entry hello_module_entry = {
+#if ZEND_MODULE_API_NO >= 20010901
+    STANDARD_MODULE_HEADER,
+#endif
+    PHP_HELLO_WORLD_EXTNAME,
+    hello_functions,
+    PHP_MINIT(hello),
+    PHP_MSHUTDOWN(hello),
+    PHP_RINIT(hello),
+    NULL,
+    NULL,
+#if ZEND_MODULE_API_NO >= 20010901
+    PHP_HELLO_WORLD_VERSION,
+#endif
+    STANDARD_MODULE_PROPERTIES
+};
+
+#ifdef COMPILE_DL_HELLO
+    ZEND_GET_MODULE(hello)
+#endif
+
+PHP_INI_BEGIN()
+    PHP_INI_ENTRY("hello.greeting", "Hello World", PHP_INI_ALL, NULL)
+    STD_PHP_INI_ENTRY("hello.direction", "1", PHP_INI_ALL, OnUpdateBool, direction, zend_hello_globals, hello_globals)
+PHP_INI_END()
+
+static void php_hello_init_globals(zend_hello_globals *hello_globals)
+{
+    hello_globals->direction = 1;
+}
+
+PHP_RINIT_FUNCTION(hello)
+{
+    HELLO_G(counter) = 0;
+
+    return SUCCESS;
+}
+
+static void php_hello_person_persist_dtor(zend_rsrc_list_entry *rsrc TSRMLS_DC)
+{
+    php_hello_person *person = (php_hello_person*)rsrc->ptr;
+
+    if (person) {
+        if (person->name) {
+            pefree(person->name, 1);
+        }
+        pefree(person, 1);
+    }
+}
+
+static void php_hello_person_dtor(zend_rsrc_list_entry *rsrc TSRMLS_DC)
+{
+    php_hello_person *person = (php_hello_person*)rsrc->ptr;
+
+    if (person) {
+        if (person->name) {
+            efree(person->name);
+        }
+        efree(person);
+    }
+}
+
+PHP_MINIT_FUNCTION(hello)
+{
+    le_hello_person = zend_register_list_destructors_ex(php_hello_person_dtor, NULL, PHP_HELLO_PERSON_RES_NAME, module_number);
+    le_hello_person_persist = zend_register_list_destructors_ex (NULL, php_hello_person_persist_dtor, PHP_HELLO_PERSON_RES_NAME, module_number);
+
+    ZEND_INIT_MODULE_GLOBALS(hello, php_hello_init_globals, NULL);
+
+    REGISTER_INI_ENTRIES();
+
+    return SUCCESS;
+}
+
+PHP_MSHUTDOWN_FUNCTION(hello)
+{
+    UNREGISTER_INI_ENTRIES();
+
+    return SUCCESS;
+}
+
+PHP_FUNCTION(hello_world)
+{
+    RETURN_STRING("Hello World", 1);
+}
+
+PHP_FUNCTION(hello_long)
+{
+    if (HELLO_G(direction)) {
+        HELLO_G(counter)++;
+    } else {
+        HELLO_G(counter)--;
+    }
+
+    RETURN_LONG(HELLO_G(counter));
+}
+
+PHP_FUNCTION(hello_double)
+{
+    RETURN_DOUBLE(3.1415926535);
+}
+
+PHP_FUNCTION(hello_bool)
+{
+    RETURN_BOOL(1);
+}
+
+PHP_FUNCTION(hello_null)
+{
+    RETURN_NULL();
+}
+
+PHP_FUNCTION(hello_greetme)
+{
+    zval *zname;
+
+    if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "z", &zname) == FAILURE) {
+        RETURN_NULL();
+    }
+
+    convert_to_string(zname);
+
+    php_printf("Hello ");
+    PHPWRITE(Z_STRVAL_P(zname), Z_STRLEN_P(zname));
+    php_printf("
+");
+
+    RETURN_TRUE;
+}
+
+PHP_FUNCTION(hello_add)
+{
+    long a;
+    double b;
+    zend_bool return_long = 0;
+
+    if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "ld|b", &a, &b, &return_long) == FAILURE) {
+        RETURN_NULL();
+    }
+
+    if (return_long) {
+        RETURN_LONG(a + b);
+    } else {
+        RETURN_DOUBLE(a + b);
+    }
+}
+
+PHP_FUNCTION(hello_dump)
+{
+    zval *uservar;
+
+    if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "z", &uservar) == FAILURE) {
+    RETURN_NULL();
+    }
+
+    switch (Z_TYPE_P(uservar)) {
+    case IS_NULL:
+        php_printf("NULL
+");
+        break;
+    case IS_BOOL:
+        php_printf("Boolean: %s
+", Z_LVAL_P(uservar) ? "TRUE" : "FALSE");
+        break;
+    case IS_LONG:
+        php_printf("Long: %ld
+", Z_LVAL_P(uservar));
+        break;
+    case IS_DOUBLE:
+        php_printf("Double: %f
+", Z_DVAL_P(uservar));
+        break;
+    case IS_STRING:
+        php_printf("String: ");
+        PHPWRITE(Z_STRVAL_P(uservar), Z_STRLEN_P(uservar));
+        php_printf("
+");
+        break;
+    case IS_RESOURCE:
+        php_printf("Resource
+");
+        break;
+    case IS_ARRAY:
+        php_printf("Array
+");
+        break;
+    case IS_OBJECT:
+        php_printf("Object
+");
+        break;
+    default:
+        php_printf("Unknown
+");
+    }
+
+    RETURN_TRUE;
+}
+
+PHP_FUNCTION(hello_array)
+{
+    char *mystr;
+    zval *mysubarray;
+
+    array_init(return_value);
+
+    add_index_long(return_value, 42, 123);
+    add_next_index_string(return_value, "I should now be found at index 43", 1);
+    add_next_index_stringl(return_value, "I'm at 44!", 10, 1);
+    mystr = estrdup("Forty Five");
+    add_next_index_string(return_value, mystr, 0);
+    add_assoc_double(return_value, "pi", 3.1415926535);
+
+    ALLOC_INIT_ZVAL(mysubarray);
+    array_init(mysubarray);
+
+    add_next_index_string(mysubarray, "hello", 1);
+    php_printf("mysubarray->refcount = %d
+", mysubarray->refcount);
+    mysubarray->refcount = 2;
+    php_printf("mysubarray->refcount = %d
+", mysubarray->refcount);
+    add_assoc_zval(return_value, "subarray", mysubarray);
+    php_printf("mysubarray->refcount = %d
+", mysubarray->refcount);
+}
+
+PHP_FUNCTION(hello_array_strings)
+{
+    zval *arr, **data;
+    HashTable *arr_hash;
+    HashPosition pointer;
+    int array_count;
+
+    if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "a", &arr) == FAILURE) {
+        RETURN_NULL();
+    }
+
+    arr_hash = Z_ARRVAL_P(arr);
+    array_count = zend_hash_num_elements(arr_hash);
+
+    php_printf("The array passed contains %d elements
+", array_count);
+
+    for(zend_hash_internal_pointer_reset_ex(arr_hash, &pointer); zend_hash_get_current_data_ex(arr_hash, (void**) &data, &pointer) == SUCCESS; zend_hash_move_forward_ex(arr_hash, &pointer)) {
+
+        zval temp;
+        char *key;
+        int key_len;
+        long index;
+
+        if (zend_hash_get_current_key_ex(arr_hash, &key, &key_len, &index, 0, &pointer) == HASH_KEY_IS_STRING) {
+            PHPWRITE(key, key_len);
+        } else {
+            php_printf("%ld", index);
+        }
+
+        php_printf(" => ");
+
+        temp = **data;
+        zval_copy_ctor(&temp);
+        convert_to_string(&temp);
+        PHPWRITE(Z_STRVAL(temp), Z_STRLEN(temp));
+        php_printf("
+");
+        zval_dtor(&temp);
+    }
+
+    RETURN_TRUE;
+}
+
+static int php_hello_array_walk(zval **element TSRMLS_DC)
+{
+    zval temp;
+    temp = **element;
+    zval_copy_ctor(&temp);
+    convert_to_string(&temp);
+    PHPWRITE(Z_STRVAL(temp), Z_STRLEN(temp));
+    php_printf("
+");
+    zval_dtor(&temp);
+
+    return ZEND_HASH_APPLY_KEEP;
+}
+
+static int php_hello_array_walk_arg(zval **element, char *greeting TSRMLS_DC)
+{
+    php_printf("%s", greeting);
+    php_hello_array_walk(element TSRMLS_CC);
+
+    return ZEND_HASH_APPLY_KEEP;
+}
+
+static int php_hello_array_walk_args(zval **element, int num_args, va_list args, zend_hash_key *hash_key)
+{
+    char *prefix = va_arg(args, char*);
+    char *suffix = va_arg(args, char*);
+    TSRMLS_FETCH();
+
+    php_printf("%s", prefix);
+    php_hello_array_walk(element TSRMLS_CC);
+    php_printf("%s
+", suffix);
+
+    return ZEND_HASH_APPLY_KEEP;
+}
+
+PHP_FUNCTION(hello_array_walk)
+{
+    zval *zarray;
+    int print_newline = 1;
+
+    if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "a", &zarray) == FAILURE) {
+        RETURN_NULL();
+    }
+
+    zend_hash_apply(Z_ARRVAL_P(zarray), (apply_func_t)php_hello_array_walk TSRMLS_CC);
+    zend_hash_internal_pointer_reset(Z_ARRVAL_P(zarray));
+    zend_hash_apply_with_argument(Z_ARRVAL_P(zarray), (apply_func_arg_t)php_hello_array_walk_arg, "Hello " TSRMLS_CC);
+    zend_hash_apply_with_arguments(Z_ARRVAL_P(zarray), (apply_func_args_t)php_hello_array_walk_args, 2, "Hello ", "Welcome to my extension!");
+
+    RETURN_TRUE;
+}
+
+PHP_FUNCTION(hello_array_value)
+{
+    zval *zarray, *zoffset, **zvalue;
+    long index = 0;
+    char *key = NULL;
+    int key_len = 0;
+
+    if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "az", &zarray, &zoffset) == FAILURE) {
+        RETURN_NULL();
+    }
+
+    switch (Z_TYPE_P(zoffset)) {
+    case IS_NULL:
+        index = 0;
+        break;
+    case IS_DOUBLE:
+        index = (long)Z_DVAL_P(zoffset);
+        break;
+    case IS_BOOL:
+    case IS_LONG:
+    case IS_RESOURCE:
+        index = Z_LVAL_P(zoffset);
+        break;
+    case IS_STRING:
+        key = Z_STRVAL_P(zoffset);
+        key_len = Z_STRLEN_P(zoffset);
+        break;
+    case IS_ARRAY:
+        key = "Array";
+        key_len = sizeof("Array") - 1;
+        break;
+    case IS_OBJECT:
+        key = "Object";
+        key_len = sizeof("Object") - 1;
+        break;
+    default:
+        key = "Unknown";
+        key_len = sizeof("Unknown") - 1;
+    }
+
+    if (key && zend_hash_find(Z_ARRVAL_P(zarray), key, key_len + 1, (void**)&zvalue) == FAILURE) {
+        php_error_docref(NULL TSRMLS_CC, E_NOTICE, "Undefined index: %s", key);
+        RETURN_NULL();
+    } else if (!key && zend_hash_index_find(Z_ARRVAL_P(zarray), index, (void**)&zvalue) == FAILURE) {
+        php_error_docref(NULL TSRMLS_CC, E_NOTICE, "Undefined index: %ld", index);
+        RETURN_NULL();
+    }
+
+    *return_value = **zvalue;
+    zval_copy_ctor(return_value);
+}
+
+PHP_FUNCTION(hello_get_global_var)
+{
+    char *varname;
+    int varname_len;
+    zval **varvalue;
+
+    if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "s", &varname, &varname_len) == FAILURE) {
+        RETURN_NULL();
+    }
+
+    if (zend_hash_find(&EG(symbol_table), varname, varname_len + 1, (void**)&varvalue) == FAILURE) {
+        php_error_docref(NULL TSRMLS_CC, E_NOTICE, "Undefined variable: %s", varname);
+        RETURN_NULL();
+    }
+
+    *return_value = **varvalue;
+    zval_copy_ctor(return_value);
+}
+
+PHP_FUNCTION(hello_set_local_var)
+{
+    zval *newvar;
+    char *varname;
+    int varname_len;
+    zval *value;
+
+    if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "sz", &varname, &varname_len, &value) == FAILURE) {
+        RETURN_NULL();
+    }
+
+    ALLOC_INIT_ZVAL(newvar);
+    *newvar = *value;
+    zval_copy_ctor(newvar);
+
+    zend_hash_add(EG(active_symbol_table), varname, varname_len + 1, &newvar, sizeof(zval*), NULL);
+
+    RETURN_TRUE;
+}
+
+PHP_FUNCTION(hello_person_new)
+{
+    php_hello_person *person;
+    char *name;
+    int name_len;
+    long age;
+
+    if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "sl", &name, &name_len, &age) == FAILURE) {
+        RETURN_FALSE;
+    }
+
+    if (name_len < 1) {
+        php_error_docref(NULL TSRMLS_CC, E_WARNING, "No name given, person resource not created.");
+        RETURN_FALSE;
+    }
+
+    if (age < 0 || age > 255) {
+        php_error_docref(NULL TSRMLS_CC, E_WARNING, "Nonsense age (%d) given, person resource not created.", age);
+        RETURN_FALSE;
+    }
+
+    person = emalloc(sizeof(php_hello_person));
+    person->name = estrndup(name, name_len);
+    person->name_len = name_len;
+    person->age = age;
+
+    ZEND_REGISTER_RESOURCE(return_value, person, le_hello_person);
+}
+
+PHP_FUNCTION(hello_person_pnew)
+{
+    php_hello_person *person;
+    char *name, *key;
+    int name_len, key_len;
+    long age;
+    list_entry *le, new_le;
+
+    if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "sl", &name, &name_len, &age) == FAILURE) {
+        RETURN_FALSE;
+    }
+
+    if (name_len < 1) {
+        php_error_docref(NULL TSRMLS_CC, E_WARNING, "No name given, person resource not created.");
+        RETURN_FALSE;
+    }
+
+    if (age < 0 || age > 255) {
+        php_error_docref(NULL TSRMLS_CC, E_WARNING, "Nonsense age (%d) given, person resource not created.", age);
+        RETURN_FALSE;
+    }
+
+    /* Look for an established resource */
+    key_len = spprintf(&key, 0, "hello_person_%s_%d
+", name, age);
+    if (zend_hash_find(&EG(persistent_list), key, key_len + 1, &le) == SUCCESS) {
+        /* An entry for this person already exists */
+        ZEND_REGISTER_RESOURCE(return_value, le->ptr, le_hello_person_persist);
+        efree(key);
+        return;
+    }
+
+    /* New person, allocate a structure */
+    person = pemalloc(sizeof(php_hello_person), 1);
+    person->name = pemalloc(name_len + 1, 1);
+    memcpy(person->name, name, name_len + 1);
+    person->name_len = name_len;
+    person->age = age;
+
+    ZEND_REGISTER_RESOURCE(return_value, person, le_hello_person_persist);
+
+    /* Store a reference in the persistence list */
+    new_le.ptr = person;
+    new_le.type = le_hello_person_persist;
+    zend_hash_add(&EG(persistent_list), key, key_len + 1, &new_le, sizeof(list_entry), NULL);
+
+    efree(key);
+}
+
+PHP_FUNCTION(hello_person_greet)
+{
+    php_hello_person *person;
+    zval *zperson;
+
+    if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "r", &zperson) == FAILURE) {
+        RETURN_FALSE;
+    }
+
+    ZEND_FETCH_RESOURCE2(person, php_hello_person*, &zperson, -1, PHP_HELLO_PERSON_RES_NAME, le_hello_person, le_hello_person_persist);
+
+    php_printf("Hello ");
+    PHPWRITE(person->name, person->name_len);
+    php_printf("!
+According to my records, you are %d years old.
+", person->age);
+
+    RETURN_TRUE;
+}
+
+PHP_FUNCTION(hello_person_delete)
+{
+    zval *zperson;
+
+    if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "r", &zperson) == FAILURE) {
+        RETURN_FALSE;
+    }
+
+    zend_list_delete(Z_LVAL_P(zperson));
+    RETURN_TRUE;
+}
+			</pre>
+		</div>
+		<div class="right">
+			<h2>核查代码</h2>
+			<p>再次处理, 你的扩展文件最后应该是这样: </p>
+			<h3>config.m4</h3>
+			<pre>
+PHP_ARG_ENABLE(hello, [whether to enable Hello World support],
+[ --enable-hello Enable Hello World support])
+if test "$PHP_HELLO" = "yes"; then
+  AC_DEFINE(HAVE_HELLO, 1, [Whether you have Hello World])
+  PHP_NEW_EXTENSION(hello, hello.c, $ext_shared)
+fi
+			</pre>
+			<h3>php_hello.h</h3>
+			<pre>
+#ifndef PHP_HELLO_H
+#define PHP_HELLO_H 1
+#ifdef ZTS
+#include "TSRM.h"
+#endif
+
+ZEND_BEGIN_MODULE_GLOBALS(hello)
+    long counter;
+    zend_bool direction;
+ZEND_END_MODULE_GLOBALS(hello)
+
+#ifdef ZTS
+#define HELLO_G(v) TSRMG(hello_globals_id, zend_hello_globals *, v)
+#else
+#define HELLO_G(v) (hello_globals.v)
+#endif
+
+#define PHP_HELLO_WORLD_VERSION "1.0"
+#define PHP_HELLO_WORLD_EXTNAME "hello"
+
+typedef struct _php_hello_person {
+    char *name;
+    int name_len;
+    long age;
+} php_hello_person;
+
+#define PHP_HELLO_PERSON_RES_NAME "Person Data"
+
+PHP_MINIT_FUNCTION(hello);
+PHP_MSHUTDOWN_FUNCTION(hello);
+PHP_RINIT_FUNCTION(hello);
+
+PHP_FUNCTION(hello_world);
+PHP_FUNCTION(hello_long);
+PHP_FUNCTION(hello_double);
+PHP_FUNCTION(hello_bool);
+PHP_FUNCTION(hello_null);
+PHP_FUNCTION(hello_greetme);
+PHP_FUNCTION(hello_add);
+PHP_FUNCTION(hello_dump);
+PHP_FUNCTION(hello_array);
+PHP_FUNCTION(hello_array_strings);
+PHP_FUNCTION(hello_array_walk);
+PHP_FUNCTION(hello_array_value);
+PHP_FUNCTION(hello_get_global_var);
+PHP_FUNCTION(hello_set_local_var);
+PHP_FUNCTION(hello_person_new);
+PHP_FUNCTION(hello_person_pnew);
+PHP_FUNCTION(hello_person_greet);
+PHP_FUNCTION(hello_person_delete);
+
+extern zend_module_entry hello_module_entry;
+#define phpext_hello_ptr &hello_module_entry
+
+#endif
+			</pre>
+			<h3>hello.c</h3>
+			<pre>
+#ifdef HAVE_CONFIG_H
+#include "config.h"
+#endif
+#include "php.h"
+#include "php_ini.h"
+#include "php_hello.h"
+
+int le_hello_person;
+int le_hello_person_persist;
+
+ZEND_DECLARE_MODULE_GLOBALS(hello)
+
+static function_entry hello_functions[] = {
+    PHP_FE(hello_world, NULL)
+    PHP_FE(hello_long, NULL)
+    PHP_FE(hello_double, NULL)
+    PHP_FE(hello_bool, NULL)
+    PHP_FE(hello_null, NULL)
+    PHP_FE(hello_greetme, NULL)
+    PHP_FE(hello_add, NULL)
+    PHP_FE(hello_dump, NULL)
+    PHP_FE(hello_array, NULL)
+    PHP_FE(hello_array_strings, NULL)
+    PHP_FE(hello_array_walk, NULL)
+    PHP_FE(hello_array_value, NULL)
+    PHP_FE(hello_get_global_var, NULL)
+    PHP_FE(hello_set_local_var, NULL)
+    PHP_FE(hello_person_new, NULL)
+    PHP_FE(hello_person_pnew, NULL)
+    PHP_FE(hello_person_greet, NULL)
+    PHP_FE(hello_person_delete, NULL)
+    {NULL, NULL, NULL}
+};
+
+zend_module_entry hello_module_entry = {
+#if ZEND_MODULE_API_NO >= 20010901
+    STANDARD_MODULE_HEADER,
+#endif
+    PHP_HELLO_WORLD_EXTNAME,
+    hello_functions,
+    PHP_MINIT(hello),
+    PHP_MSHUTDOWN(hello),
+    PHP_RINIT(hello),
+    NULL,
+    NULL,
+#if ZEND_MODULE_API_NO >= 20010901
+    PHP_HELLO_WORLD_VERSION,
+#endif
+    STANDARD_MODULE_PROPERTIES
+};
+
+#ifdef COMPILE_DL_HELLO
+    ZEND_GET_MODULE(hello)
+#endif
+
+PHP_INI_BEGIN()
+    PHP_INI_ENTRY("hello.greeting", "Hello World", PHP_INI_ALL, NULL)
+    STD_PHP_INI_ENTRY("hello.direction", "1", PHP_INI_ALL, OnUpdateBool, direction, zend_hello_globals, hello_globals)
+PHP_INI_END()
+
+static void php_hello_init_globals(zend_hello_globals *hello_globals)
+{
+    hello_globals->direction = 1;
+}
+
+PHP_RINIT_FUNCTION(hello)
+{
+    HELLO_G(counter) = 0;
+
+    return SUCCESS;
+}
+
+static void php_hello_person_persist_dtor(zend_rsrc_list_entry *rsrc TSRMLS_DC)
+{
+    php_hello_person *person = (php_hello_person*)rsrc->ptr;
+
+    if (person) {
+        if (person->name) {
+            pefree(person->name, 1);
+        }
+        pefree(person, 1);
+    }
+}
+
+static void php_hello_person_dtor(zend_rsrc_list_entry *rsrc TSRMLS_DC)
+{
+    php_hello_person *person = (php_hello_person*)rsrc->ptr;
+
+    if (person) {
+        if (person->name) {
+            efree(person->name);
+        }
+        efree(person);
+    }
+}
+
+PHP_MINIT_FUNCTION(hello)
+{
+    le_hello_person = zend_register_list_destructors_ex(php_hello_person_dtor, NULL, PHP_HELLO_PERSON_RES_NAME, module_number);
+    le_hello_person_persist = zend_register_list_destructors_ex (NULL, php_hello_person_persist_dtor, PHP_HELLO_PERSON_RES_NAME, module_number);
+
+    ZEND_INIT_MODULE_GLOBALS(hello, php_hello_init_globals, NULL);
+
+    REGISTER_INI_ENTRIES();
+
+    return SUCCESS;
+}
+
+PHP_MSHUTDOWN_FUNCTION(hello)
+{
+    UNREGISTER_INI_ENTRIES();
+
+    return SUCCESS;
+}
+
+PHP_FUNCTION(hello_world)
+{
+    RETURN_STRING("Hello World", 1);
+}
+
+PHP_FUNCTION(hello_long)
+{
+    if (HELLO_G(direction)) {
+        HELLO_G(counter)++;
+    } else {
+        HELLO_G(counter)--;
+    }
+
+    RETURN_LONG(HELLO_G(counter));
+}
+
+PHP_FUNCTION(hello_double)
+{
+    RETURN_DOUBLE(3.1415926535);
+}
+
+PHP_FUNCTION(hello_bool)
+{
+    RETURN_BOOL(1);
+}
+
+PHP_FUNCTION(hello_null)
+{
+    RETURN_NULL();
+}
+
+PHP_FUNCTION(hello_greetme)
+{
+    zval *zname;
+
+    if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "z", &zname) == FAILURE) {
+        RETURN_NULL();
+    }
+
+    convert_to_string(zname);
+
+    php_printf("Hello ");
+    PHPWRITE(Z_STRVAL_P(zname), Z_STRLEN_P(zname));
+    php_printf("
+");
+
+    RETURN_TRUE;
+}
+
+PHP_FUNCTION(hello_add)
+{
+    long a;
+    double b;
+    zend_bool return_long = 0;
+
+    if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "ld|b", &a, &b, &return_long) == FAILURE) {
+        RETURN_NULL();
+    }
+
+    if (return_long) {
+        RETURN_LONG(a + b);
+    } else {
+        RETURN_DOUBLE(a + b);
+    }
+}
+
+PHP_FUNCTION(hello_dump)
+{
+    zval *uservar;
+
+    if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "z", &uservar) == FAILURE) {
+    RETURN_NULL();
+    }
+
+    switch (Z_TYPE_P(uservar)) {
+    case IS_NULL:
+        php_printf("NULL
+");
+        break;
+    case IS_BOOL:
+        php_printf("Boolean: %s
+", Z_LVAL_P(uservar) ? "TRUE" : "FALSE");
+        break;
+    case IS_LONG:
+        php_printf("Long: %ld
+", Z_LVAL_P(uservar));
+        break;
+    case IS_DOUBLE:
+        php_printf("Double: %f
+", Z_DVAL_P(uservar));
+        break;
+    case IS_STRING:
+        php_printf("String: ");
+        PHPWRITE(Z_STRVAL_P(uservar), Z_STRLEN_P(uservar));
+        php_printf("
+");
+        break;
+    case IS_RESOURCE:
+        php_printf("Resource
+");
+        break;
+    case IS_ARRAY:
+        php_printf("Array
+");
+        break;
+    case IS_OBJECT:
+        php_printf("Object
+");
+        break;
+    default:
+        php_printf("Unknown
+");
+    }
+
+    RETURN_TRUE;
+}
+
+PHP_FUNCTION(hello_array)
+{
+    char *mystr;
+    zval *mysubarray;
+
+    array_init(return_value);
+
+    add_index_long(return_value, 42, 123);
+    add_next_index_string(return_value, "I should now be found at index 43", 1);
+    add_next_index_stringl(return_value, "I'm at 44!", 10, 1);
+    mystr = estrdup("Forty Five");
+    add_next_index_string(return_value, mystr, 0);
+    add_assoc_double(return_value, "pi", 3.1415926535);
+
+    ALLOC_INIT_ZVAL(mysubarray);
+    array_init(mysubarray);
+
+    add_next_index_string(mysubarray, "hello", 1);
+    php_printf("mysubarray->refcount = %d
+", mysubarray->refcount);
+    mysubarray->refcount = 2;
+    php_printf("mysubarray->refcount = %d
+", mysubarray->refcount);
+    add_assoc_zval(return_value, "subarray", mysubarray);
+    php_printf("mysubarray->refcount = %d
+", mysubarray->refcount);
+}
+
+PHP_FUNCTION(hello_array_strings)
+{
+    zval *arr, **data;
+    HashTable *arr_hash;
+    HashPosition pointer;
+    int array_count;
+
+    if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "a", &arr) == FAILURE) {
+        RETURN_NULL();
+    }
+
+    arr_hash = Z_ARRVAL_P(arr);
+    array_count = zend_hash_num_elements(arr_hash);
+
+    php_printf("The array passed contains %d elements
+", array_count);
+
+    for(zend_hash_internal_pointer_reset_ex(arr_hash, &pointer); zend_hash_get_current_data_ex(arr_hash, (void**) &data, &pointer) == SUCCESS; zend_hash_move_forward_ex(arr_hash, &pointer)) {
+
+        zval temp;
+        char *key;
+        int key_len;
+        long index;
+
+        if (zend_hash_get_current_key_ex(arr_hash, &key, &key_len, &index, 0, &pointer) == HASH_KEY_IS_STRING) {
+            PHPWRITE(key, key_len);
+        } else {
+            php_printf("%ld", index);
+        }
+
+        php_printf(" => ");
+
+        temp = **data;
+        zval_copy_ctor(&temp);
+        convert_to_string(&temp);
+        PHPWRITE(Z_STRVAL(temp), Z_STRLEN(temp));
+        php_printf("
+");
+        zval_dtor(&temp);
+    }
+
+    RETURN_TRUE;
+}
+
+static int php_hello_array_walk(zval **element TSRMLS_DC)
+{
+    zval temp;
+    temp = **element;
+    zval_copy_ctor(&temp);
+    convert_to_string(&temp);
+    PHPWRITE(Z_STRVAL(temp), Z_STRLEN(temp));
+    php_printf("
+");
+    zval_dtor(&temp);
+
+    return ZEND_HASH_APPLY_KEEP;
+}
+
+static int php_hello_array_walk_arg(zval **element, char *greeting TSRMLS_DC)
+{
+    php_printf("%s", greeting);
+    php_hello_array_walk(element TSRMLS_CC);
+
+    return ZEND_HASH_APPLY_KEEP;
+}
+
+static int php_hello_array_walk_args(zval **element, int num_args, va_list args, zend_hash_key *hash_key)
+{
+    char *prefix = va_arg(args, char*);
+    char *suffix = va_arg(args, char*);
+    TSRMLS_FETCH();
+
+    php_printf("%s", prefix);
+    php_hello_array_walk(element TSRMLS_CC);
+    php_printf("%s
+", suffix);
+
+    return ZEND_HASH_APPLY_KEEP;
+}
+
+PHP_FUNCTION(hello_array_walk)
+{
+    zval *zarray;
+    int print_newline = 1;
+
+    if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "a", &zarray) == FAILURE) {
+        RETURN_NULL();
+    }
+
+    zend_hash_apply(Z_ARRVAL_P(zarray), (apply_func_t)php_hello_array_walk TSRMLS_CC);
+    zend_hash_internal_pointer_reset(Z_ARRVAL_P(zarray));
+    zend_hash_apply_with_argument(Z_ARRVAL_P(zarray), (apply_func_arg_t)php_hello_array_walk_arg, "Hello " TSRMLS_CC);
+    zend_hash_apply_with_arguments(Z_ARRVAL_P(zarray), (apply_func_args_t)php_hello_array_walk_args, 2, "Hello ", "Welcome to my extension!");
+
+    RETURN_TRUE;
+}
+
+PHP_FUNCTION(hello_array_value)
+{
+    zval *zarray, *zoffset, **zvalue;
+    long index = 0;
+    char *key = NULL;
+    int key_len = 0;
+
+    if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "az", &zarray, &zoffset) == FAILURE) {
+        RETURN_NULL();
+    }
+
+    switch (Z_TYPE_P(zoffset)) {
+    case IS_NULL:
+        index = 0;
+        break;
+    case IS_DOUBLE:
+        index = (long)Z_DVAL_P(zoffset);
+        break;
+    case IS_BOOL:
+    case IS_LONG:
+    case IS_RESOURCE:
+        index = Z_LVAL_P(zoffset);
+        break;
+    case IS_STRING:
+        key = Z_STRVAL_P(zoffset);
+        key_len = Z_STRLEN_P(zoffset);
+        break;
+    case IS_ARRAY:
+        key = "Array";
+        key_len = sizeof("Array") - 1;
+        break;
+    case IS_OBJECT:
+        key = "Object";
+        key_len = sizeof("Object") - 1;
+        break;
+    default:
+        key = "Unknown";
+        key_len = sizeof("Unknown") - 1;
+    }
+
+    if (key && zend_hash_find(Z_ARRVAL_P(zarray), key, key_len + 1, (void**)&zvalue) == FAILURE) {
+        php_error_docref(NULL TSRMLS_CC, E_NOTICE, "Undefined index: %s", key);
+        RETURN_NULL();
+    } else if (!key && zend_hash_index_find(Z_ARRVAL_P(zarray), index, (void**)&zvalue) == FAILURE) {
+        php_error_docref(NULL TSRMLS_CC, E_NOTICE, "Undefined index: %ld", index);
+        RETURN_NULL();
+    }
+
+    *return_value = **zvalue;
+    zval_copy_ctor(return_value);
+}
+
+PHP_FUNCTION(hello_get_global_var)
+{
+    char *varname;
+    int varname_len;
+    zval **varvalue;
+
+    if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "s", &varname, &varname_len) == FAILURE) {
+        RETURN_NULL();
+    }
+
+    if (zend_hash_find(&EG(symbol_table), varname, varname_len + 1, (void**)&varvalue) == FAILURE) {
+        php_error_docref(NULL TSRMLS_CC, E_NOTICE, "Undefined variable: %s", varname);
+        RETURN_NULL();
+    }
+
+    *return_value = **varvalue;
+    zval_copy_ctor(return_value);
+}
+
+PHP_FUNCTION(hello_set_local_var)
+{
+    zval *newvar;
+    char *varname;
+    int varname_len;
+    zval *value;
+
+    if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "sz", &varname, &varname_len, &value) == FAILURE) {
+        RETURN_NULL();
+    }
+
+    ALLOC_INIT_ZVAL(newvar);
+    *newvar = *value;
+    zval_copy_ctor(newvar);
+
+    zend_hash_add(EG(active_symbol_table), varname, varname_len + 1, &newvar, sizeof(zval*), NULL);
+
+    RETURN_TRUE;
+}
+
+PHP_FUNCTION(hello_person_new)
+{
+    php_hello_person *person;
+    char *name;
+    int name_len;
+    long age;
+
+    if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "sl", &name, &name_len, &age) == FAILURE) {
+        RETURN_FALSE;
+    }
+
+    if (name_len < 1) {
+        php_error_docref(NULL TSRMLS_CC, E_WARNING, "No name given, person resource not created.");
+        RETURN_FALSE;
+    }
+
+    if (age < 0 || age > 255) {
+        php_error_docref(NULL TSRMLS_CC, E_WARNING, "Nonsense age (%d) given, person resource not created.", age);
+        RETURN_FALSE;
+    }
+
+    person = emalloc(sizeof(php_hello_person));
+    person->name = estrndup(name, name_len);
+    person->name_len = name_len;
+    person->age = age;
+
+    ZEND_REGISTER_RESOURCE(return_value, person, le_hello_person);
+}
+
+PHP_FUNCTION(hello_person_pnew)
+{
+    php_hello_person *person;
+    char *name, *key;
+    int name_len, key_len;
+    long age;
+    list_entry *le, new_le;
+
+    if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "sl", &name, &name_len, &age) == FAILURE) {
+        RETURN_FALSE;
+    }
+
+    if (name_len < 1) {
+        php_error_docref(NULL TSRMLS_CC, E_WARNING, "No name given, person resource not created.");
+        RETURN_FALSE;
+    }
+
+    if (age < 0 || age > 255) {
+        php_error_docref(NULL TSRMLS_CC, E_WARNING, "Nonsense age (%d) given, person resource not created.", age);
+        RETURN_FALSE;
+    }
+
+    /* Look for an established resource */
+    key_len = spprintf(&key, 0, "hello_person_%s_%d
+", name, age);
+    if (zend_hash_find(&EG(persistent_list), key, key_len + 1, &le) == SUCCESS) {
+        /* An entry for this person already exists */
+        ZEND_REGISTER_RESOURCE(return_value, le->ptr, le_hello_person_persist);
+        efree(key);
+        return;
+    }
+
+    /* New person, allocate a structure */
+    person = pemalloc(sizeof(php_hello_person), 1);
+    person->name = pemalloc(name_len + 1, 1);
+    memcpy(person->name, name, name_len + 1);
+    person->name_len = name_len;
+    person->age = age;
+
+    ZEND_REGISTER_RESOURCE(return_value, person, le_hello_person_persist);
+
+    /* Store a reference in the persistence list */
+    new_le.ptr = person;
+    new_le.type = le_hello_person_persist;
+    zend_hash_add(&EG(persistent_list), key, key_len + 1, &new_le, sizeof(list_entry), NULL);
+
+    efree(key);
+}
+
+PHP_FUNCTION(hello_person_greet)
+{
+    php_hello_person *person;
+    zval *zperson;
+
+    if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "r", &zperson) == FAILURE) {
+        RETURN_FALSE;
+    }
+
+    ZEND_FETCH_RESOURCE2(person, php_hello_person*, &zperson, -1, PHP_HELLO_PERSON_RES_NAME, le_hello_person, le_hello_person_persist);
+
+    php_printf("Hello ");
+    PHPWRITE(person->name, person->name_len);
+    php_printf("!
+According to my records, you are %d years old.
+", person->age);
+
+    RETURN_TRUE;
+}
+
+PHP_FUNCTION(hello_person_delete)
+{
+    zval *zperson;
+
+    if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "r", &zperson) == FAILURE) {
+        RETURN_FALSE;
+    }
+
+    zend_list_delete(Z_LVAL_P(zperson));
+    RETURN_TRUE;
+}
+			</pre>
+		</div>
+	</section>
+	<section id="sammary">
+		<div class="left">
+			<h2>Summary</h2>
+			<p>In this tutorial, Part Three of the Extension Writing series, you learned the few simple steps necessary to attach arbitrary, sometimes opaque data to PHP userspace variables. In later steps, you’ll combine these techniques with linking against third party libraries to create the kind of glue extensions you see so frequently with PHP.</p>
+			<p>In Part Four, we’ll take a look into Objects – from the simple arrays-with-functions available in PHP 4, to the more complex overloaded OOP structures available in PHP 5.</p>
+		</div>
+		<div class="right">
+			<h2>总结</h2>
+			<p>在这个教程中, 第三部分的扩展编写, 你学会了一些简单的步骤需要附加任意, 有时潜在的数据到PHP用户变量中. 在接下来的步骤中, 你会使用第三方库一起编译创建各式各样的PHP扩展.</p>
+			<p>在第四部分, 你将深入到对象的编写(PHP4中增加), 以及PHP5中更多复杂面向对象结构</p>
+		</div>
+	</section>
+
+
+</div>
+</body>
+</html>
